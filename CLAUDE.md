@@ -17,14 +17,15 @@ blueprint-graph-reader/
 │           ├── BlueprintGraphReader.cpp          # API implementation + serialization
 │           └── BlueprintGraphReaderModule.cpp    # Module startup/shutdown
 ├── Python/
-│   ├── extract_blueprint.py        # One-shot extraction (UE Python → JSON file)
-│   ├── graph_to_pseudocode.py      # JSON → indented pseudocode
-│   ├── graph_to_mermaid.py         # JSON → Mermaid flowchart
-│   └── graph_to_graphify.py        # JSON → graphify knowledge graph
+│   ├── __init__.py                # Package marker
+│   ├── extract_blueprint.py       # One-shot extraction (UE Python → JSON file)
+│   ├── graph_to_pseudocode.py     # JSON → indented pseudocode
+│   ├── graph_to_mermaid.py        # JSON → Mermaid flowchart
+│   └── graph_to_graphify.py       # JSON → graphify knowledge graph
 ├── Tests/
-│   └── test_pseudocode.py          # Unit tests for pseudocode generator
+│   └── test_pseudocode.py         # Unit tests for pseudocode generator
 └── docs/
-    ├── proposal.md                 # Technical design document
+    ├── proposal.md                # Technical design document
     └── development-plan.md         # 5-phase development plan
 ```
 
@@ -42,13 +43,12 @@ import unreal
 
 # One-shot: extract blueprint to JSON file
 # (Using the Python script)
-import subprocess
-subprocess.run(["python", "Python/extract_blueprint.py", "/Game/MyActor", "-o", "my_actor.json"])
+import extract_blueprint
+extract_blueprint.extract("/Game/MyActor", output_path="~/my_actor.json")
 
 # Or call C++ API directly via Python
-bp = unreal.load_object(None, "/Game/MyActor.MyActor")
-reader = unreal.BlueprintGraphReader
-json_str = reader.extract_blueprint_as_json(bp)
+bp = unreal.load_asset("/Game/MyActor.MyActor")
+json_str = unreal.BlueprintGraphReader.extract_blueprint_as_json(bp)
 ```
 
 ## Design Principles
@@ -61,4 +61,4 @@ json_str = reader.extract_blueprint_as_json(bp)
 ## Dependencies
 
 - UE 5.4+ (tested on 5.4/5.5)
-- Modules: Core, Engine, BlueprintGraph, UnrealEd, Json, JsonUtilities, Kismet
+- Modules: Core, Engine, BlueprintGraph, UnrealEd, Json, JsonUtilities, Kismet, CoreUObject, EditorScriptingUtilities

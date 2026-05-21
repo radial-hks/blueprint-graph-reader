@@ -32,7 +32,8 @@ Blueprint Graph Reader 解决这个问题：
 import unreal, json
 
 bp = unreal.load_asset("/Game/Blueprints/BP_Enemy")
-graph_data = unreal.BlueprintGraphReader.extract_blueprint(bp)
+json_str = unreal.BlueprintGraphReader.extract_blueprint_as_json(bp)
+graph_data = json.loads(json_str)
 print(json.dumps(graph_data, indent=2))
 ```
 
@@ -41,15 +42,21 @@ print(json.dumps(graph_data, indent=2))
 ```
 blueprint-graph-reader/
 ├── README.md
+├── CLAUDE.md
 ├── docs/
 │   ├── proposal.md              # 方案详解
 │   └── development-plan.md      # 开发计划
 ├── Source/
 │   └── BlueprintGraphReader/    # UE C++ 插件源码
 │       ├── BlueprintGraphReader.Build.cs
-│       ├── BlueprintGraphReader.h
-│       └── BlueprintGraphReader.cpp
+│       ├── Public/
+│       │   ├── BlueprintGraphReader.h
+│       │   └── BlueprintGraphReaderModule.h
+│       └── Private/
+│           ├── BlueprintGraphReader.cpp
+│           └── BlueprintGraphReaderModule.cpp
 ├── Python/
+│   ├── __init__.py
 │   ├── extract_blueprint.py     # 主提取脚本
 │   ├── graph_to_pseudocode.py   # JSON → 伪代码
 │   ├── graph_to_mermaid.py      # JSON → Mermaid

@@ -16,6 +16,9 @@ from collections import defaultdict
 # K2Node 子类 → 伪代码模板映射
 NODE_HANDLERS = {}
 
+# DFS 最大深度限制，防止无限递归
+MAX_DFS_DEPTH = 50
+
 
 def handler(node_class_prefix: str):
     """装饰器：注册节点类型处理器"""
@@ -58,10 +61,13 @@ def graph_to_pseudocode(graph_data: dict) -> str:
 
         # 构建索引
         node_map = {n["id"]: n for n in graph.get("nodes", [])}
-        pin_map = {}  # pin_id → node_id
+        pin_map = {}    # pin_id → node_id
+        pin_name_map = {}  # pin_id → pin_name (新增：纯序号 pin id 无法提取 name)
+
         for node in graph.get("nodes", []):
             for pin in node.get("pins", []):
                 pin_map[pin["id"]] = node["id"]
+                pin_name_map[pin["id"]] = pin.get("name", "")
 
         # 边索引：从 output pin → input pin
         exec_edges = {}   # from_node_id → [(to_node_id, from_pin_name, to_pin_name)]
@@ -77,8 +83,8 @@ def graph_to_pseudocode(graph_data: dict) -> str:
 
             if edge_type == "exec":
                 # exec 边：from_node → to_node
-                from_pin_name = _pin_name_from_id(from_pin)
-                to_pin_name = _pin_name_from_id(to_pin)
+                from_pin_name = pin_name_map.get(from_pin, "")
+                to_pin_name = pin_name_map.get(to_pin, "")
                 if from_node_id not in exec_edges:
                     exec_edges[from_node_id] = []
                 exec_edges[from_node_id].append({
@@ -93,22 +99,16 @@ def graph_to_pseudocode(graph_data: dict) -> str:
         # 找入口节点
         entry_nodes = _find_entry_nodes(graph, exec_edges, pin_map)
 
-        # DFS 遍历
-        visited = set()
+        # DFS 遍历 — 每个入口独立 visited 集合（W6: 允许同一节点在不同入口路径中访问）
         for entry in entry_nodes:
+            visited = set()  # 每个入口独立的 visited
             _trace_exec_flow(
-                node_map, exec_edges, data_edges, pin_map,
-                entry, lines, indent=1, visited=visited
+                node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                entry, lines, indent=1, visited=visited, depth=0
             )
             lines.append("")
 
     return "\n".join(lines)
-
-
-def _pin_name_from_id(pin_id: str) -> str:
-    """从 pin id 提取 pin name (n0_Condition → Condition)"""
-    parts = pin_id.split("_", 1)
-    return parts[1] if len(parts) > 1 else pin_id
 
 
 def _find_entry_nodes(graph: dict, exec_edges: dict,
@@ -175,7 +175,6 @@ def _resolve_data_input(pin_id: str, node_map: dict,
                 return source_title
 
     # 没有连线，使用默认值
-    # 需要找到这个 pin 的默认值
     for nid, node in node_map.items():
         for pin in node.get("pins", []):
             if pin["id"] == pin_id:
@@ -188,11 +187,15 @@ def _resolve_data_input(pin_id: str, node_map: dict,
 
 
 def _trace_exec_flow(node_map: dict, exec_edges: dict,
-                     data_edges: dict, pin_map: dict,
+                     data_edges: dict, pin_map: dict, pin_name_map: dict,
                      current_node_id: str, lines: list,
-                     indent: int, visited: set):
+                     indent: int, visited: set, depth: int):
     """沿 exec pin DFS 遍历，生成伪代码"""
     if current_node_id in visited:
+        return
+    if depth > MAX_DFS_DEPTH:  # W7: 深度限制
+        prefix = "  " * indent
+        lines.append(f"{prefix}# ... (max depth reached)")
         return
     visited.add(current_node_id)
 
@@ -218,26 +221,27 @@ def _trace_exec_flow(node_map: dict, exec_edges: dict,
 
     if handler_func:
         handler_func(
-            node, node_map, exec_edges, data_edges, pin_map,
-            lines, indent, visited, prefix, current_node_id
+            node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+            lines, indent, visited, prefix, current_node_id, depth
         )
     else:
         # 默认处理：输出节点标题
         lines.append(f"{prefix}{title}")
         # 继续追踪 exec 输出
         _trace_next_exec(current_node_id, node_map, exec_edges,
-                         data_edges, pin_map, lines, indent, visited)
+                         data_edges, pin_map, pin_name_map,
+                         lines, indent, visited, depth)
 
 
 def _trace_next_exec(node_id: str, node_map: dict, exec_edges: dict,
-                     data_edges: dict, pin_map: dict,
-                     lines: list, indent: int, visited: set):
+                     data_edges: dict, pin_map: dict, pin_name_map: dict,
+                     lines: list, indent: int, visited: set, depth: int):
     """追踪节点的默认 exec 输出（非 Branch 的单 exec 输出）"""
     targets = exec_edges.get(node_id, [])
     for target in targets:
         _trace_exec_flow(
-            node_map, exec_edges, data_edges, pin_map,
-            target["to_node"], lines, indent, visited
+            node_map, exec_edges, data_edges, pin_map, pin_name_map,
+            target["to_node"], lines, indent, visited, depth + 1
         )
 
 
@@ -246,18 +250,18 @@ def _trace_next_exec(node_id: str, node_map: dict, exec_edges: dict,
 # ============================================================================
 
 @handler("K2Node_Event")
-def handle_event(node, node_map, exec_edges, data_edges, pin_map,
-                 lines, indent, visited, prefix, node_id):
+def handle_event(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                 lines, indent, visited, prefix, node_id, depth):
     """事件入口：Event BeginPlay / Event Tick 等"""
     title = node.get("title", "Event")
     lines.append(f"{prefix}{title}:")
     _trace_next_exec(node_id, node_map, exec_edges, data_edges,
-                     pin_map, lines, indent + 1, visited)
+                     pin_map, pin_name_map, lines, indent + 1, visited, depth)
 
 
 @handler("K2Node_FunctionEntry")
-def handle_function_entry(node, node_map, exec_edges, data_edges, pin_map,
-                          lines, indent, visited, prefix, node_id):
+def handle_function_entry(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                          lines, indent, visited, prefix, node_id, depth):
     """函数入口"""
     title = node.get("title", "Function")
     # 收集参数
@@ -273,22 +277,22 @@ def handle_function_entry(node, node_map, exec_edges, data_edges, pin_map,
     params_str = ", ".join(params) if params else ""
     lines.append(f"{prefix}function {title}({params_str}):")
     _trace_next_exec(node_id, node_map, exec_edges, data_edges,
-                     pin_map, lines, indent + 1, visited)
+                     pin_map, pin_name_map, lines, indent + 1, visited, depth)
 
 
 @handler("K2Node_CustomEvent")
-def handle_custom_event(node, node_map, exec_edges, data_edges, pin_map,
-                        lines, indent, visited, prefix, node_id):
+def handle_custom_event(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                        lines, indent, visited, prefix, node_id, depth):
     """自定义事件"""
     title = node.get("title", "CustomEvent")
     lines.append(f"{prefix}event {title}:")
     _trace_next_exec(node_id, node_map, exec_edges, data_edges,
-                     pin_map, lines, indent + 1, visited)
+                     pin_map, pin_name_map, lines, indent + 1, visited, depth)
 
 
 @handler("K2Node_IfThenElse")
-def handle_branch(node, node_map, exec_edges, data_edges, pin_map,
-                  lines, indent, visited, prefix, node_id):
+def handle_branch(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                  lines, indent, visited, prefix, node_id, depth):
     """条件分支"""
     # 解析 Condition 输入
     condition_pin = None
@@ -316,8 +320,8 @@ def handle_branch(node, node_map, exec_edges, data_edges, pin_map,
     if true_targets:
         for t in true_targets:
             _trace_exec_flow(
-                node_map, exec_edges, data_edges, pin_map,
-                t["to_node"], lines, indent + 1, visited)
+                node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                t["to_node"], lines, indent + 1, visited, depth + 1)
     else:
         lines.append(f"{prefix}  # (no action)")
 
@@ -326,19 +330,19 @@ def handle_branch(node, node_map, exec_edges, data_edges, pin_map,
         lines.append(f"{prefix}else:")
         for t in false_targets:
             _trace_exec_flow(
-                node_map, exec_edges, data_edges, pin_map,
-                t["to_node"], lines, indent + 1, visited)
+                node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                t["to_node"], lines, indent + 1, visited, depth + 1)
 
     # 其他 exec 输出（如果有）
     for t in other_targets:
         _trace_exec_flow(
-            node_map, exec_edges, data_edges, pin_map,
-            t["to_node"], lines, indent, visited)
+            node_map, exec_edges, data_edges, pin_map, pin_name_map,
+            t["to_node"], lines, indent, visited, depth + 1)
 
 
 @handler("K2Node_ForEachLoop")
-def handle_for_each(node, node_map, exec_edges, data_edges, pin_map,
-                    lines, indent, visited, prefix, node_id):
+def handle_for_each(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                    lines, indent, visited, prefix, node_id, depth):
     """ForEach 循环"""
     # 解析 Array 输入
     array_str = "?"
@@ -356,8 +360,8 @@ def handle_for_each(node, node_map, exec_edges, data_edges, pin_map,
     body_targets = [t for t in targets if t["from_pin_name"] == "LoopBody"]
     for t in body_targets:
         _trace_exec_flow(
-            node_map, exec_edges, data_edges, pin_map,
-            t["to_node"], lines, indent + 1, visited)
+            node_map, exec_edges, data_edges, pin_map, pin_name_map,
+            t["to_node"], lines, indent + 1, visited, depth + 1)
 
     # Completed 输出
     completed_targets = [t for t in targets if t["from_pin_name"] == "Completed"]
@@ -365,13 +369,13 @@ def handle_for_each(node, node_map, exec_edges, data_edges, pin_map,
         lines.append(f"{prefix}# loop completed:")
         for t in completed_targets:
             _trace_exec_flow(
-                node_map, exec_edges, data_edges, pin_map,
-                t["to_node"], lines, indent, visited)
+                node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                t["to_node"], lines, indent, visited, depth + 1)
 
 
 @handler("K2Node_WhileLoop")
-def handle_while_loop(node, node_map, exec_edges, data_edges, pin_map,
-                      lines, indent, visited, prefix, node_id):
+def handle_while_loop(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                      lines, indent, visited, prefix, node_id, depth):
     """While 循环"""
     condition_str = "?"
     for pin in node.get("pins", []):
@@ -383,12 +387,12 @@ def handle_while_loop(node, node_map, exec_edges, data_edges, pin_map,
 
     lines.append(f"{prefix}while {condition_str}:")
     _trace_next_exec(node_id, node_map, exec_edges, data_edges,
-                     pin_map, lines, indent + 1, visited)
+                     pin_map, pin_name_map, lines, indent + 1, visited, depth)
 
 
 @handler("K2Node_CallFunction")
-def handle_call_function(node, node_map, exec_edges, data_edges, pin_map,
-                         lines, indent, visited, prefix, node_id):
+def handle_call_function(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                         lines, indent, visited, prefix, node_id, depth):
     """函数调用"""
     title = node.get("title", "CallFunction")
 
@@ -406,12 +410,12 @@ def handle_call_function(node, node_map, exec_edges, data_edges, pin_map,
     lines.append(f"{prefix}{title}({args_str})")
 
     _trace_next_exec(node_id, node_map, exec_edges, data_edges,
-                     pin_map, lines, indent, visited)
+                     pin_map, pin_name_map, lines, indent, visited, depth)
 
 
 @handler("K2Node_VariableGet")
-def handle_variable_get(node, node_map, exec_edges, data_edges, pin_map,
-                        lines, indent, visited, prefix, node_id):
+def handle_variable_get(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                        lines, indent, visited, prefix, node_id, depth):
     """变量读取"""
     title = node.get("title", "Variable")
     lines.append(f"{prefix}{title}")
@@ -419,8 +423,8 @@ def handle_variable_get(node, node_map, exec_edges, data_edges, pin_map,
 
 
 @handler("K2Node_VariableSet")
-def handle_variable_set(node, node_map, exec_edges, data_edges, pin_map,
-                        lines, indent, visited, prefix, node_id):
+def handle_variable_set(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                        lines, indent, visited, prefix, node_id, depth):
     """变量写入"""
     title = node.get("title", "Variable")
     # 解析赋值输入
@@ -435,12 +439,12 @@ def handle_variable_set(node, node_map, exec_edges, data_edges, pin_map,
 
     lines.append(f"{prefix}{title} = {value_str}")
     _trace_next_exec(node_id, node_map, exec_edges, data_edges,
-                     pin_map, lines, indent, visited)
+                     pin_map, pin_name_map, lines, indent, visited, depth)
 
 
 @handler("K2Node_ReturnNode")
-def handle_return(node, node_map, exec_edges, data_edges, pin_map,
-                  lines, indent, visited, prefix, node_id):
+def handle_return(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                  lines, indent, visited, prefix, node_id, depth):
     """返回节点"""
     value_str = ""
     for pin in node.get("pins", []):
@@ -456,28 +460,28 @@ def handle_return(node, node_map, exec_edges, data_edges, pin_map,
 
 
 @handler("K2Node_SpawnActor")
-def handle_spawn_actor(node, node_map, exec_edges, data_edges, pin_map,
-                       lines, indent, visited, prefix, node_id):
+def handle_spawn_actor(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                       lines, indent, visited, prefix, node_id, depth):
     """生成 Actor"""
     title = node.get("title", "SpawnActor")
     lines.append(f"{prefix}{title}")
     _trace_next_exec(node_id, node_map, exec_edges, data_edges,
-                     pin_map, lines, indent, visited)
+                     pin_map, pin_name_map, lines, indent, visited, depth)
 
 
 @handler("K2Node_MacroInstance")
-def handle_macro_instance(node, node_map, exec_edges, data_edges, pin_map,
-                          lines, indent, visited, prefix, node_id):
+def handle_macro_instance(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                          lines, indent, visited, prefix, node_id, depth):
     """宏实例（简化处理，不递归展开）"""
     title = node.get("title", "Macro")
     lines.append(f"{prefix}macro {title}:")
     _trace_next_exec(node_id, node_map, exec_edges, data_edges,
-                     pin_map, lines, indent + 1, visited)
+                     pin_map, pin_name_map, lines, indent + 1, visited, depth)
 
 
 @handler("K2Node_Sequence")
-def handle_sequence(node, node_map, exec_edges, data_edges, pin_map,
-                    lines, indent, visited, prefix, node_id):
+def handle_sequence(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                    lines, indent, visited, prefix, node_id, depth):
     """Sequence 节点"""
     lines.append(f"{prefix}sequence:")
 
@@ -491,13 +495,13 @@ def handle_sequence(node, node_map, exec_edges, data_edges, pin_map,
     for i, target in enumerate(then_targets):
         lines.append(f"{prefix}  step {i}:")
         _trace_exec_flow(
-            node_map, exec_edges, data_edges, pin_map,
-            target["to_node"], lines, indent + 2, visited)
+            node_map, exec_edges, data_edges, pin_map, pin_name_map,
+            target["to_node"], lines, indent + 2, visited, depth + 1)
 
 
 @handler("K2Node_Switch")
-def handle_switch(node, node_map, exec_edges, data_edges, pin_map,
-                  lines, indent, visited, prefix, node_id):
+def handle_switch(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                  lines, indent, visited, prefix, node_id, depth):
     """Switch 节点"""
     title = node.get("title", "Switch")
 
@@ -518,23 +522,23 @@ def handle_switch(node, node_map, exec_edges, data_edges, pin_map,
         case_name = target["from_pin_name"]
         lines.append(f"{prefix}  case {case_name}:")
         _trace_exec_flow(
-            node_map, exec_edges, data_edges, pin_map,
-            target["to_node"], lines, indent + 2, visited)
+            node_map, exec_edges, data_edges, pin_map, pin_name_map,
+            target["to_node"], lines, indent + 2, visited, depth + 1)
 
 
 @handler("K2Node_CallParentFunction")
-def handle_call_parent(node, node_map, exec_edges, data_edges, pin_map,
-                       lines, indent, visited, prefix, node_id):
+def handle_call_parent(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                       lines, indent, visited, prefix, node_id, depth):
     """调用父类函数"""
     title = node.get("title", "CallParentFunction")
     lines.append(f"{prefix}super::{title}")
     _trace_next_exec(node_id, node_map, exec_edges, data_edges,
-                     pin_map, lines, indent, visited)
+                     pin_map, pin_name_map, lines, indent, visited, depth)
 
 
 @handler("K2Node_DynamicCast")
-def handle_dynamic_cast(node, node_map, exec_edges, data_edges, pin_map,
-                        lines, indent, visited, prefix, node_id):
+def handle_dynamic_cast(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                        lines, indent, visited, prefix, node_id, depth):
     """动态类型转换"""
     title = node.get("title", "Cast")
     target_str = "?"
@@ -555,28 +559,28 @@ def handle_dynamic_cast(node, node_map, exec_edges, data_edges, pin_map,
 
     for t in success_targets:
         _trace_exec_flow(
-            node_map, exec_edges, data_edges, pin_map,
-            t["to_node"], lines, indent + 1, visited)
+            node_map, exec_edges, data_edges, pin_map, pin_name_map,
+            t["to_node"], lines, indent + 1, visited, depth + 1)
 
     if failed_targets:
         lines.append(f"{prefix}catch (cast failed):")
         for t in failed_targets:
             _trace_exec_flow(
-                node_map, exec_edges, data_edges, pin_map,
-                t["to_node"], lines, indent + 1, visited)
+                node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                t["to_node"], lines, indent + 1, visited, depth + 1)
 
 
 @handler("K2Node_MakeStruct")
-def handle_make_struct(node, node_map, exec_edges, data_edges, pin_map,
-                       lines, indent, visited, prefix, node_id):
+def handle_make_struct(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                       lines, indent, visited, prefix, node_id, depth):
     """构造结构体"""
     title = node.get("title", "MakeStruct")
     lines.append(f"{prefix}{title}(...)")
 
 
 @handler("K2Node_BreakStruct")
-def handle_break_struct(node, node_map, exec_edges, data_edges, pin_map,
-                        lines, indent, visited, prefix, node_id):
+def handle_break_struct(node, node_map, exec_edges, data_edges, pin_map, pin_name_map,
+                        lines, indent, visited, prefix, node_id, depth):
     """解构结构体"""
     title = node.get("title", "BreakStruct")
     lines.append(f"{prefix}break {title}")

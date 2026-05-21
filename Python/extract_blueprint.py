@@ -13,8 +13,10 @@ import os
 import sys
 from typing import Optional
 
-# 检测 C++ 插件是否可用
-_PLUGIN_AVAILABLE = hasattr(unreal, 'BlueprintGraphReader')
+
+def _is_plugin_available() -> bool:
+    """延迟检测 C++ 插件是否可用（每次调用时检测，而非导入时）"""
+    return hasattr(unreal, 'BlueprintGraphReader')
 
 
 def extract(asset_path: str, output_path: Optional[str] = None) -> dict:
@@ -28,7 +30,7 @@ def extract(asset_path: str, output_path: Optional[str] = None) -> dict:
     Returns:
         蓝图图结构的 dict（符合 blueprint-graph-v1 schema）
     """
-    if not _PLUGIN_AVAILABLE:
+    if not _is_plugin_available():
         unreal.log_warning(
             "BlueprintGraphReader plugin not available. "
             "Falling back to metadata-only extraction."
@@ -75,7 +77,7 @@ def extract_all(content_path: str, output_dir: str,
     output_dir = os.path.expanduser(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    # 扫描蓝图资产
+    # 扫描蓝图资产 — 使用正确的 AssetRegistry API
     asset_registry = unreal.AssetRegistryHelpers.get_asset_registry()
     search_options = unreal.AssetRegistrySearchOptions()
     search_options.set_editor_property("package_path", content_path)

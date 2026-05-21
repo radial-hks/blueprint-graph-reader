@@ -13,6 +13,14 @@
  * - 只读：不修改任何蓝图数据
  * - 最小接口：只暴露提取所需的核心函数
  * - Editor Only：只在编辑器模式下编译
+ *
+ * 图覆盖范围：
+ * - UbergraphPages (EventGraph 等)
+ * - FunctionGraphs (自定义函数，含 Construction Script)
+ * - DelegateSignatureGraphs (委托签名图)
+ *
+ * 注意：SCS 组件模板和 Timeline 模板不作为独立 UEdGraph 存储，
+ * Construction Script 作为函数图已在 FunctionGraphs 中捕获。
  */
 UCLASS(meta=(ScriptName="BlueprintGraphReader"))
 class BLUEPRINTGRAPHREADER_API UBlueprintGraphReader : public UBlueprintFunctionLibrary
@@ -28,7 +36,7 @@ public:
      *   "schema_version": "v1",
      *   "asset_path": "...",
      *   "blueprint_type": "...",
-     *   "parent_class": "...",
+     *   "parent_class": "...",    // 始终输出，无父类时为 ""
      *   "variables": [...],
      *   "graphs": [{
      *     "name": "EventGraph",
@@ -41,7 +49,7 @@ public:
     UFUNCTION(BlueprintCallable, Category = "BlueprintGraph")
     static FString ExtractBlueprintAsJson(UBlueprint* Blueprint);
 
-    /** 获取蓝图的所有图名（EventGraph, 自定义函数图, 宏图等） */
+    /** 获取蓝图的所有图名（EventGraph, 自定义函数图, 委托签名图等） */
     UFUNCTION(BlueprintCallable, Category = "BlueprintGraph")
     static TArray<FString> GetBlueprintGraphNames(UBlueprint* Blueprint);
 
@@ -65,8 +73,9 @@ private:
     /** 将单个 EdGraph 序列化为 FJsonObject */
     static TSharedPtr<FJsonObject> SerializeGraph(UEdGraph* Graph, int32 StartNodeId = 0);
 
-    /** 将单个 EdGraphNode 序列化为 FJsonObject */
-    static TSharedPtr<FJsonObject> SerializeNode(UEdGraphNode* Node, const FString& NodeId);
+    /** 将单个 EdGraphNode 序列化为 FJsonObject（通过 PinIdMap 查找 Pin ID） */
+    static TSharedPtr<FJsonObject> SerializeNode(UEdGraphNode* Node, const FString& NodeId,
+                                                 const TMap<UEdGraphPin*, FString>& PinIdMap);
 
     /** 将单个 EdGraphPin 序列化为 FJsonObject */
     static TSharedPtr<FJsonObject> SerializePin(UEdGraphPin* Pin, const FString& PinId);
@@ -75,7 +84,7 @@ private:
     static void ExtractEdges(UEdGraph* Graph, const TMap<UEdGraphPin*, FString>& PinIdMap,
                              TArray<TSharedPtr<FJsonValue>>& EdgesArray);
 
-    /** 将 K2Node 子类名标准化（去掉 U/K 前缀和 _C 后缀） */
+    /** 将 K2Node 子类名标准化（去掉 U/A 前缀和 _C 后缀） */
     static FString NormalizeNodeClassName(UClass* NodeClass);
 
     /** 判断 Pin 是否为 exec 类型 */
@@ -83,4 +92,10 @@ private:
 
     /** 获取 Pin 的数据类型字符串表示 */
     static FString GetPinTypeString(UEdGraphPin* Pin);
+
+    /** 从 PinCategory FName 获取类型字符串（内部辅助） */
+    static FString GetPinTypeStringFromCategory(const FName& Category);
+
+    /** 节点标题最大长度（超过时截断并加省略号） */
+    static constexpr int32 MaxTitleLength = 256;
 };

@@ -134,17 +134,24 @@ def graph_to_graphify(graph_data: dict) -> dict:
                 })
 
         # 执行边（控制流）
+        # pin id 已改为纯序号制 (p0, p1, ...)，node id 为 (n0, n1, ...)
+        # 需要通过 pin_map 查找归属关系
+        pin_to_node = {}  # pin_id → graphify node id
+        for node in graph.get("nodes", []):
+            json_node_id = node["id"]
+            gn_id = node_id_map.get(json_node_id, "")
+            if not gn_id:
+                continue
+            for pin in node.get("pins", []):
+                pin_to_node[pin["id"]] = gn_id
+
         for edge in graph.get("edges", []):
             from_pin = edge.get("from_pin", "")
             to_pin = edge.get("to_pin", "")
             edge_type_str = edge.get("edge_type", "data")
 
-            # 从 pin id 提取 node id
-            from_node_json_id = from_pin.rsplit("_", 1)[0] if "_" in from_pin else ""
-            to_node_json_id = to_pin.rsplit("_", 1)[0] if "_" in to_pin else ""
-
-            from_gn_id = node_id_map.get(from_node_json_id, "")
-            to_gn_id = node_id_map.get(to_node_json_id, "")
+            from_gn_id = pin_to_node.get(from_pin, "")
+            to_gn_id = pin_to_node.get(to_pin, "")
 
             if from_gn_id and to_gn_id:
                 result["edges"].append({

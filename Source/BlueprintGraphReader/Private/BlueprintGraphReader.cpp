@@ -36,11 +36,9 @@ FString UBlueprintGraphReader::ExtractBlueprintAsJson(UBlueprint* Blueprint)
     RootJson->SetStringField("blueprint_type",
         StaticEnum<EBPType>()->GetNameStringByValue(static_cast<int64>(Blueprint->BlueprintType)));
 
-    // Parent class
-    if (Blueprint->ParentClass)
-    {
-        RootJson->SetStringField("parent_class", Blueprint->ParentClass->GetName());
-    }
+    // Parent class — 始终输出，无父类时为空字符串
+    RootJson->SetStringField("parent_class",
+        Blueprint->ParentClass ? Blueprint->ParentClass->GetName() : FString());
 
     // Variables
     TArray<TSharedPtr<FJsonValue>> VarsArray;
@@ -57,7 +55,7 @@ FString UBlueprintGraphReader::ExtractBlueprintAsJson(UBlueprint* Blueprint)
         }
         else
         {
-            TypeStr = Var.VarType.PinCategory.ToString();
+            TypeStr = GetPinTypeStringFromCategory(Var.VarType.PinCategory);
         }
         VarObj->SetStringField("type", TypeStr);
 
@@ -88,18 +86,21 @@ FString UBlueprintGraphReader::ExtractBlueprintAsJson(UBlueprint* Blueprint)
         }
     }
 
-    // Function graphs
+    // Function graphs (includes Construction Script)
     for (UEdGraph* Graph : Blueprint->FunctionGraphs)
     {
         if (Graph)
         {
             TSharedPtr<FJsonObject> GraphObj = SerializeGraph(Graph, NodeIdCounter);
-            GraphObj->SetStringField("graph_type", "function");
+            // 标记 Construction Script
+            FString GraphType = (Graph->GetName() == TEXT("ConstructionScript"))
+                ? TEXT("construction_script") : TEXT("function");
+            GraphObj->SetStringField("graph_type", GraphType);
             GraphsArray.Add(MakeShared<FJsonValueObject>(GraphObj));
         }
     }
 
-    // Macro graphs (delegated graphs)
+    // Delegate signature graphs
     for (UEdGraph* Graph : Blueprint->DelegateSignatureGraphs)
     {
         if (Graph)
@@ -157,7 +158,15 @@ FString UBlueprintGraphReader::GetNodeSemanticInfo(UEdGraphNode* Node)
 
     TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
     Obj->SetStringField("class", NormalizeNodeClassName(Node->GetClass()));
-    Obj->SetStringField("title", Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
+
+    // 截断过长标题
+    FString Title = Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
+    if (Title.Len() > MaxTitleLength)
+    {
+        Title = Title.Left(MaxTitleLength - 3) + TEXT("...");
+    }
+    Obj->SetStringField("title", Title);
+
     Obj->SetStringField("comment", Node->NodeComment);
     Obj->SetNumberField("pos_x", Node->NodePosX);
     Obj->SetNumberField("pos_y", Node->NodePosY);
@@ -206,7 +215,7 @@ TArray<FString> UBlueprintGraphReader::GetBlueprintVariables(UBlueprint* Bluepri
         VarObj->SetStringField("type",
             Var.VarType.PinSubCategoryObject.IsValid()
                 ? Var.VarType.PinSubCategoryObject->GetName()
-                : Var.VarType.PinCategory.ToString());
+                : GetPinTypeStringFromCategory(Var.VarType.PinCategory));
         VarObj->SetStringField("default_value", Var.DefaultValue);
         VarObj->SetBoolField("instance_editable",
             (Var.PropertyFlags & CPF_Edit) != 0);
@@ -230,32 +239,43 @@ TSharedPtr<FJsonObject> UBlueprintGraphReader::SerializeGraph(UEdGraph* Graph, i
     TSharedPtr<FJsonObject> GraphObj = MakeShared<FJsonObject>();
     GraphObj->SetStringField("name", Graph->GetName());
 
-    // 节点序列化
-    TMap<UEdGraphPin*, FString> PinIdMap;  // Pin → 全局唯一 Pin ID
-    TArray<TSharedPtr<FJsonValue>> NodesArray;
-    TArray<TSharedPtr<FJsonValue>> EdgesArray;
+    // Phase 1: 先构建 PinIdMap — Pin 指针 → 唯一序号 ID
+    TMap<UEdGraphPin*, FString> PinIdMap;
+    int32 PinIdx = 0;
 
     int32 NodeIdx = StartNodeId;
     for (UEdGraphNode* Node : Graph->Nodes)
     {
         if (!Node) continue;
 
-        FString NodeId = FString::Printf(TEXT("n%d"), NodeIdx);
-        TSharedPtr<FJsonObject> NodeObj = SerializeNode(Node, NodeId);
-        NodesArray.Add(MakeShared<FJsonValueObject>(NodeObj));
-
-        // 注册所有 Pin 到 ID 映射
         for (UEdGraphPin* Pin : Node->Pins)
         {
             if (!Pin || Pin->bHidden) continue;
-            FString PinId = FString::Printf(TEXT("n%d_%s"), NodeIdx, *Pin->PinName.ToString());
+            FString PinId = FString::Printf(TEXT("p%d"), PinIdx);
             PinIdMap.Add(Pin, PinId);
+            PinIdx++;
         }
 
         NodeIdx++;
     }
 
-    // 边提取
+    // Phase 2: 序列化节点（通过 PinIdMap 查找 Pin ID）
+    TArray<TSharedPtr<FJsonValue>> NodesArray;
+    TArray<TSharedPtr<FJsonValue>> EdgesArray;
+
+    NodeIdx = StartNodeId;
+    for (UEdGraphNode* Node : Graph->Nodes)
+    {
+        if (!Node) continue;
+
+        FString NodeId = FString::Printf(TEXT("n%d"), NodeIdx);
+        TSharedPtr<FJsonObject> NodeObj = SerializeNode(Node, NodeId, PinIdMap);
+        NodesArray.Add(MakeShared<FJsonValueObject>(NodeObj));
+
+        NodeIdx++;
+    }
+
+    // Phase 3: 边提取
     ExtractEdges(Graph, PinIdMap, EdgesArray);
 
     GraphObj->SetArrayField("nodes", NodesArray);
@@ -264,12 +284,21 @@ TSharedPtr<FJsonObject> UBlueprintGraphReader::SerializeGraph(UEdGraph* Graph, i
     return GraphObj;
 }
 
-TSharedPtr<FJsonObject> UBlueprintGraphReader::SerializeNode(UEdGraphNode* Node, const FString& NodeId)
+TSharedPtr<FJsonObject> UBlueprintGraphReader::SerializeNode(UEdGraphNode* Node, const FString& NodeId,
+                                                              const TMap<UEdGraphPin*, FString>& PinIdMap)
 {
     TSharedPtr<FJsonObject> NodeObj = MakeShared<FJsonObject>();
     NodeObj->SetStringField("id", NodeId);
     NodeObj->SetStringField("class", NormalizeNodeClassName(Node->GetClass()));
-    NodeObj->SetStringField("title", Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
+
+    // 截断过长标题
+    FString Title = Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
+    if (Title.Len() > MaxTitleLength)
+    {
+        Title = Title.Left(MaxTitleLength - 3) + TEXT("...");
+    }
+    NodeObj->SetStringField("title", Title);
+
     NodeObj->SetStringField("comment", Node->NodeComment);
 
     // Position
@@ -278,13 +307,14 @@ TSharedPtr<FJsonObject> UBlueprintGraphReader::SerializeNode(UEdGraphNode* Node,
     Position.Add(MakeShared<FJsonValueNumber>(Node->NodePosY));
     NodeObj->SetArrayField("position", Position);
 
-    // Pins
+    // Pins — 从 PinIdMap 查找统一 ID
     TArray<TSharedPtr<FJsonValue>> PinsArray;
     for (UEdGraphPin* Pin : Node->Pins)
     {
         if (!Pin || Pin->bHidden) continue;
 
-        FString PinId = FString::Printf(TEXT("%s_%s"), *NodeId, *Pin->PinName.ToString());
+        const FString* PinIdPtr = PinIdMap.Find(Pin);
+        FString PinId = PinIdPtr ? *PinIdPtr : FString();
         TSharedPtr<FJsonObject> PinObj = SerializePin(Pin, PinId);
         PinsArray.Add(MakeShared<FJsonValueObject>(PinObj));
     }
@@ -319,7 +349,8 @@ void UBlueprintGraphReader::ExtractEdges(UEdGraph* Graph,
     const TMap<UEdGraphPin*, FString>& PinIdMap,
     TArray<TSharedPtr<FJsonValue>>& EdgesArray)
 {
-    TSet<FString> AddedEdges; // 去重
+    // 用 TPair<UEdGraphPin*, UEdGraphPin*> 去重，避免字符串拼接歧义
+    TSet<TPair<UEdGraphPin*, UEdGraphPin*>> AddedEdges;
 
     for (UEdGraphNode* Node : Graph->Nodes)
     {
@@ -340,8 +371,8 @@ void UBlueprintGraphReader::ExtractEdges(UEdGraph* Graph,
                 FString* ToPinId = PinIdMap.Find(LinkedPin);
                 if (!ToPinId) continue;
 
-                // 去重 key
-                FString EdgeKey = *FromPinId + "->" + *ToPinId;
+                // 去重：用指针对而非字符串拼接
+                TPair<UEdGraphPin*, UEdGraphPin*> EdgeKey(Pin, LinkedPin);
                 if (AddedEdges.Contains(EdgeKey)) continue;
                 AddedEdges.Add(EdgeKey);
 
@@ -367,21 +398,17 @@ FString UBlueprintGraphReader::NormalizeNodeClassName(UClass* NodeClass)
 
     FString ClassName = NodeClass->GetName();
 
-    // 移除常见的 UE 前缀: UK2Node_ → K2Node_, UEdGraphNode_ → EdGraphNode_
-    if (ClassName.StartsWith("U") && ClassName.Len() > 1 && FChar::IsUpper(ClassName[1]))
+    // 移除 UE 标准前缀: U → 如果第二个字符是大写
+    // 常见模式: UK2Node_Event → K2Node_Event, UEdGraphNode → EdGraphNode
+    // 但 K2Node_*, EdGraphNode_*, AnimGraphNode_* 本身不以 U 开头
+    if (ClassName.Len() > 1 && FChar::IsUpper(ClassName[0]) && FChar::IsUpper(ClassName[1]))
     {
-        // 检查是否是 UE 标准前缀
-        if (ClassName.StartsWith("K2Node_") ||
-            ClassName.StartsWith("EdGraphNode_") ||
-            ClassName.StartsWith("AnimGraphNode_"))
-        {
-            // 这些类名不以 U 开头，直接返回
-            return ClassName;
-        }
-        ClassName.RemoveAt(0); // 移除 U 前缀
+        // UA/UF 等 double-uppercase 前缀 → 移除首字母
+        // 这覆盖了 U 前缀 + 大写类名的所有情况
+        ClassName.RemoveAt(0);
     }
 
-    // 移除 _C 后缀（如果有的话）
+    // 移除 _C 后缀（蓝图生成的类）
     if (ClassName.EndsWith("_C"))
     {
         ClassName.LeftChopInline(2);
@@ -399,34 +426,42 @@ bool UBlueprintGraphReader::IsExecPin(UEdGraphPin* Pin)
 FString UBlueprintGraphReader::GetPinTypeString(UEdGraphPin* Pin)
 {
     if (!Pin) return "unknown";
+    return GetPinTypeStringFromCategory(Pin->PinType.PinCategory);
+}
 
-    const FString& Category = Pin->PinType.PinCategory.ToString();
+FString UBlueprintGraphReader::GetPinTypeStringFromCategory(const FName& Category)
+{
+    // 使用 UEdGraphSchema_K2 常量匹配，替代硬编码字符串
+    const FString CategoryStr = Category.ToString();
 
-    // 标准类别映射
-    if (Category == "exec")          return "exec";
-    if (Category == "bool")          return "bool";
-    if (Category == "byte")          return "byte";
-    if (Category == "int")           return "int";
-    if (Category == "int64")         return "int64";
-    if (Category == "float")         return "float";
-    if (Category == "double")        return "double";
-    if (Category == "string")        return "string";
-    if (Category == "text")          return "text";
-    if (Category == "name")          return "name";
-    if (Category == "vector")        return "vector";
-    if (Category == "rotator")       return "rotator";
-    if (Category == "transform")     return "transform";
-    if (Category == "object")        return "object";
-    if (Category == "class")         return "class";
-    if (Category == "struct")        return "struct";
-    if (Category == "enum")          return "enum";
-    if (Category == "delegate")      return "delegate";
-    if (Category == "interface")     return "interface";
-    if (Category == "softobject")    return "soft_object";
-    if (Category == "softclass")     return "soft_class";
-    if (Category == "wildcard")      return "wildcard";
+    if (Category == UEdGraphSchema_K2::PC_Exec)        return "exec";
+    if (Category == UEdGraphSchema_K2::PC_Boolean)     return "bool";
+    if (Category == UEdGraphSchema_K2::PC_Byte)         return "byte";
+    if (Category == UEdGraphSchema_K2::PC_Int)         return "int";
+    if (Category == UEdGraphSchema_K2::PC_Int64)       return "int64";
+    if (Category == UEdGraphSchema_K2::PC_Float)       return "float";
+    if (Category == UEdGraphSchema_K2::PC_Double)      return "double";
+    if (Category == UEdGraphSchema_K2::PC_String)      return "string";
+    if (Category == UEdGraphSchema_K2::PC_Text)         return "text";
+    if (Category == UEdGraphSchema_K2::PC_Name)        return "name";
+    if (Category == UEdGraphSchema_K2::PC_Struct)      return "struct";
+    if (Category == UEdGraphSchema_K2::PC_Object)      return "object";
+    if (Category == UEdGraphSchema_K2::PC_Class)       return "class";
+    if (Category == UEdGraphSchema_K2::PC_SoftObject)  return "soft_object";
+    if (Category == UEdGraphSchema_K2::PC_SoftClass)   return "soft_class";
+    if (Category == UEdGraphSchema_K2::PC_Delegate)     return "delegate";
+    if (Category == UEdGraphSchema_K2::PC_Interface)    return "interface";
+    if (Category == UEdGraphSchema_K2::PC_Wildcard)    return "wildcard";
 
-    return Category; // fallback: 返回原始类别名
+    // UE 还有一些常用类别不在标准常量中，用字符串匹配
+    if (CategoryStr == "vector")        return "vector";
+    if (CategoryStr == "rotator")       return "rotator";
+    if (CategoryStr == "transform")     return "transform";
+    if (CategoryStr == "enum")          return "enum";
+    if (CategoryStr == "map")           return "map";
+    if (CategoryStr == "set")           return "set";
+
+    return CategoryStr; // fallback: 返回原始类别名
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -19,12 +19,12 @@
 
 ### 任务清单
 
-- [ ] 1.1 创建 UE 插件项目结构
-  - `BlueprintGraphReader.Build.cs`：模块依赖 Engine, BlueprintGraph, UnrealEd, Json
+- [x] 1.1 创建 UE 插件项目结构
+  - `BlueprintGraphReader.Build.cs`：模块依赖 Engine, BlueprintGraph, UnrealEd, Json, JsonUtilities, Kismet, CoreUObject, EditorScriptingUtilities
   - `BlueprintGraphReader.h`：接口声明
   - `BlueprintGraphReader.cpp`：实现
 
-- [ ] 1.2 实现核心读取函数
+- [x] 1.2 实现核心读取函数
   - `ExtractBlueprintAsJson(UBlueprint*)`：一步提取整个蓝图为 JSON 字符串
   - `GetBlueprintGraphNames(UBlueprint*)`：获取所有图名
   - `GetGraphNodes(UEdGraph*)`：获取节点列表
@@ -32,12 +32,16 @@
   - `GetNodeSemanticInfo(UEdGraphNode*)`：获取节点语义
   - `GetBlueprintVariables(UBlueprint*)`：获取变量列表
 
-- [ ] 1.3 实现图序列化
-  - `SerializeGraph(UEdGraph*)`：将单个 EdGraph 序列化为 FJsonObject
-  - `SerializeNode(UEdGraphNode*)`：将单个节点序列化
-  - `SerializePin(UEdGraphPin*)`：将单个 Pin 序列化
-  - 处理 K2Node 子类名提取（`Node->GetClass()->GetName()`）
-  - 处理 Pin 连接关系（`Pin->LinkedTo` 数组遍历）
+- [x] 1.3 实现图序列化
+  - `SerializeGraph(UEdGraph*, int32 StartNodeId)`：将单个 EdGraph 序列化为 FJsonObject
+  - `SerializeNode(UEdGraphNode*, NodeId, PinIdMap)`：将单个节点序列化（Pin ID 通过 PinIdMap 统一查找）
+  - `SerializePin(UEdGraphPin*, PinId)`：将单个 Pin 序列化
+  - `ExtractEdges(UEdGraph*, PinIdMap, EdgesArray)`：提取边，用 TPair<Pin*,Pin*> 去重
+  - Pin ID 改为纯序号制（p0, p1, p2...），避免字符串碰撞
+  - NormalizeNodeClassName：移除 U 前缀 + _C 后缀
+  - GetPinTypeStringFromCategory：使用 UEdGraphSchema_K2 常量替代硬编码字符串
+  - FullTitle 超过 256 字符时截断加省略号
+  - parent_class 为空时仍输出字段（空字符串而非省略）
 
 - [ ] 1.4 编译测试
   - 在 UE 5.4/5.5 编辑器中加载插件
@@ -63,7 +67,7 @@ Pin 方向:
   Pin->Direction == EGPD_Output → output
 
 Pin 类型:
-  Pin->PinType.PinCategory → "exec", "bool", "float", "int", "object", "struct", "string" 等
+  Pin->PinType.PinCategory → 通过 UEdGraphSchema_K2 常量匹配
   Pin->PinType.PinSubCategoryObject → 具体类型 (如 Actor 类)
 ```
 
@@ -82,12 +86,14 @@ Pin 类型:
 
 ### 任务清单
 
-- [ ] 2.1 实现 `extract_blueprint.py`
+- [x] 2.1 实现 `extract_blueprint.py`
   - 输入：蓝图资产路径（如 `/Game/Blueprints/BP_Enemy`）
   - 输出：JSON 文件（按 Schema v1 规范）
   - 支持批量提取（扫描 Content Browser 下所有蓝图）
+  - 延迟检测 C++ 插件（调用时而非导入时检测）
+  - AssetRegistry API 修复（使用 AssetRegistrySearchOptions）
 
-- [ ] 2.2 实现回退模式（无 C++ 插件时）
+- [x] 2.2 实现回退模式（无 C++ 插件时）
   - 检测插件是否可用
   - 不可用时输出警告，只提取元数据（变量、图名等可用 Python API 获取的部分）
 
@@ -123,12 +129,12 @@ extract_blueprint.extract_all("/Game/Blueprints/", output_dir="~/blueprint_graph
 
 ### 任务清单
 
-- [ ] 3.1 实现核心遍历算法
+- [x] 3.1 实现核心遍历算法
   - `find_entry_nodes()`：识别入口节点（K2Node_Event, K2Node_FunctionEntry, K2Node_CustomEvent）
   - `trace_exec_flow()`：沿 exec pin DFS 遍历
   - `resolve_data_input()`：沿 data pin 回溯，解析输入值的来源
 
-- [ ] 3.2 处理关键节点类型
+- [x] 3.2 处理关键节点类型
 
   | 节点类型 | 伪代码输出 |
   |---------|-----------|
@@ -145,13 +151,19 @@ extract_blueprint.extract_all("/Game/Blueprints/", output_dir="~/blueprint_graph
   | K2Node_SpawnActor | `SpawnActor(Class, Location)` |
   | K2Node_MacroInstance | `MacroName(args)` （递归展开） |
   | K2Node_Sequence | `Sequence:` / `Then 0:` / `Then 1:` |
+  | K2Node_CustomEvent | `event CustomEvent:` |
+  | K2Node_DynamicCast | `cast Type(Object):` / `catch (cast failed):` |
+  | K2Node_CallParentFunction | `super::FunctionName` |
+  | K2Node_MakeStruct | `MakeStruct(...)` |
+  | K2Node_BreakStruct | `break StructName` |
 
-- [ ] 3.3 处理复杂情况
-  - **循环检测**：避免 DFS 死循环（记录已访问节点）
+- [x] 3.3 处理复杂情况
+  - **循环检测**：每个入口独立 visited 集合（W6），DFS 深度限制 50（W7）
   - **并行分支**：Sequence 节点的多个 Then 输出
   - **宏展开**：K2Node_MacroInstance 递归解析内部图
   - **注释保留**：NodeComment 作为行内注释输出
   - **默认值展开**：未连接的 data pin 使用 DefaultValue
+  - **Pin ID 映射**：纯序号 pin id 通过 pin_name_map 查找名称
 
 - [ ] 3.4 单元测试
   - 构造简单的 JSON 图结构 fixture
@@ -199,17 +211,17 @@ function TakeDamage(Amount: float):
 
 ### 任务清单
 
-- [ ] 4.1 实现 `graph_to_mermaid.py`
+- [x] 4.1 实现 `graph_to_mermaid.py`
   - 节点 → Mermaid 方框（显示 node.class + node.title）
   - exec 边 → 实线箭头
   - data 边 → 虚线箭头
   - 自动布局提示（利用 NodePosX/Y）
 
-- [ ] 4.2 实现 `graph_to_graphify.py`
+- [x] 4.2 实现 `graph_to_graphify.py`
   - 蓝图节点 → graphify node（带 class、title 属性）
   - Pin 连接 → graphify edge（带 edge_type 标签）
   - 变量 → graphify node（type=variable）
-  - 支持从 graphify CLI 查询"哪些蓝图调用了函数 X"
+  - Pin-to-Node 映射改为安全方式（通过 pin_to_node dict，不再 rsplit）
 
 - [ ] 4.3 验证
   - Mermaid 输出在 VS Code 预览中正确渲染
@@ -295,5 +307,6 @@ Week 2
 |------|------|------|------|
 | K2Node 子类过多，伪代码生成器遗漏 | 中 | 中 | 先覆盖 Top 20 常用节点类型，其余 fallback 为原始类名 |
 | UE 版本升级导致 C++ API 变化 | 低 | 高 | 接口层隔离：C++ 只做薄包装，业务逻辑全在 Python |
-| 宏图/坍缩图递归展开导致深度过大 | 中 | 低 | 设置最大递归深度，超限时输出 `<macro: name, depth exceeded>` |
+| 宏图/坍缩图递归展开导致深度过大 | 中 | 低 | 设置最大递归深度（MAX_DFS_DEPTH=50），超限时输出注释 |
 | 蓝图包含 C++ 原生事件绑定（非 K2Node） | 低 | 低 | 这类绑定在图结构中不可见，需额外文档补充 |
+| Pin ID 字符串碰撞导致错误连线 | 低 | 高 | 已改用纯序号制（p0, p1, ...），PinIdMap 统一 ID 生成 |

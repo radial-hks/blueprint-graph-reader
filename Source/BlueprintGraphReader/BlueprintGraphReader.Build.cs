@@ -31,11 +31,8 @@ public class BlueprintGraphReader : ModuleRules
         PrivateDependencyModuleNames.AddRange(new string[]
         {
             "CoreUObject",
-            "Slate",
-            "SlateCore",
             "EditorScriptingUtilities",
             "Kismet",
-            "ToolMenus",
         });
     }
 }
