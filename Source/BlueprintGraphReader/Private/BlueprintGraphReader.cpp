@@ -1,10 +1,13 @@
 // Copyright 2025 radial-hks. All Rights Reserved.
 
 #include "BlueprintGraphReader.h"
+#include "BlueprintGraphReaderModule.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
+#include "EdGraph/EdGraphSchema.h"
 #include "K2Node.h"
+#include "Kismet/EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "UObject/UnrealType.h"
 #include "Serialization/JsonWriter.h"

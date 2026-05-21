@@ -1,0 +1,25 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Blueprint Graph Reader",
+	"Description": "Extracts Blueprint graph structure (nodes, pins, edges) as JSON for AI Agent consumption. Read-only, Editor-only.",
+	"Category": "Editor",
+	"CreatedBy": "radial-hks",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"EngineVersion": "5.4.0",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "BlueprintGraphReader",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
