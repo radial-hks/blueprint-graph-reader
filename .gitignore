@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+.venv/
+venv/
+
+# UE
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+*.sln
+*.vcxproj*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vs/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build
+build/
