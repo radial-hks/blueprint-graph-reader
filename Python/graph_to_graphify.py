@@ -134,9 +134,10 @@ def graph_to_graphify(graph_data: dict) -> dict:
                 })
 
         # 执行边（控制流）
-        # pin id 已改为纯序号制 (p0, p1, ...)，node id 为 (n0, n1, ...)
-        # 需要通过 pin_map 查找归属关系
-        pin_to_node = {}  # pin_id → graphify node id
+        # pin id 已改为纯序号制 (p0, p1, ...)，无法从 ID 字符串 split 出 pin 名称
+        # W5: 在 graph 内部构建 pin_id → pin_name 映射，需要名称时从映射查
+        pin_to_node = {}      # pin_id → graphify node id
+        pin_name_map = {}     # pin_id → pin_name
         for node in graph.get("nodes", []):
             json_node_id = node["id"]
             gn_id = node_id_map.get(json_node_id, "")
@@ -144,6 +145,7 @@ def graph_to_graphify(graph_data: dict) -> dict:
                 continue
             for pin in node.get("pins", []):
                 pin_to_node[pin["id"]] = gn_id
+                pin_name_map[pin["id"]] = pin.get("name", "")
 
         for edge in graph.get("edges", []):
             from_pin = edge.get("from_pin", "")
@@ -161,6 +163,8 @@ def graph_to_graphify(graph_data: dict) -> dict:
                     "properties": {
                         "from_pin": from_pin,
                         "to_pin": to_pin,
+                        "from_pin_name": pin_name_map.get(from_pin, ""),
+                        "to_pin_name": pin_name_map.get(to_pin, ""),
                     }
                 })
 

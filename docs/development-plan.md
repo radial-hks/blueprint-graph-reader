@@ -165,7 +165,7 @@ extract_blueprint.extract_all("/Game/Blueprints/", output_dir="~/blueprint_graph
   - **默认值展开**：未连接的 data pin 使用 DefaultValue
   - **Pin ID 映射**：纯序号 pin id 通过 pin_name_map 查找名称
 
-- [ ] 3.4 单元测试
+- [x] 3.4 单元测试
   - 构造简单的 JSON 图结构 fixture
   - 验证每种节点类型的伪代码输出
   - 验证嵌套结构（if 内嵌 if，loop 内嵌 if）

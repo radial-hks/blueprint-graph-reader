@@ -36,7 +36,7 @@ public:
      *   "schema_version": "v1",
      *   "asset_path": "...",
      *   "blueprint_type": "...",
-     *   "parent_class": "...",    // 始终输出，无父类时为 ""
+     *   "parent_class": "...",    // 始终输出，无父类时为 null
      *   "variables": [...],
      *   "graphs": [{
      *     "name": "EventGraph",

@@ -26,6 +26,7 @@
 
 FString UBlueprintGraphReader::ExtractBlueprintAsJson(UBlueprint* Blueprint)
 {
+    // Node/Pin IDs are sequential within one ExtractBlueprintAsJson call, not stable across calls
     if (!Blueprint)
     {
         return "{}";
@@ -39,9 +40,15 @@ FString UBlueprintGraphReader::ExtractBlueprintAsJson(UBlueprint* Blueprint)
     RootJson->SetStringField("blueprint_type",
         StaticEnum<EBPType>()->GetNameStringByValue(static_cast<int64>(Blueprint->BlueprintType)));
 
-    // Parent class — 始终输出，无父类时为空字符串
-    RootJson->SetStringField("parent_class",
-        Blueprint->ParentClass ? Blueprint->ParentClass->GetName() : FString());
+    // Parent class — 始终输出，无父类时为 null
+    if (Blueprint->ParentClass)
+    {
+        RootJson->SetStringField("parent_class", Blueprint->ParentClass->GetName());
+    }
+    else
+    {
+        RootJson->SetField("parent_class", MakeShared<FJsonValueNull>());
+    }
 
     // Variables
     TArray<TSharedPtr<FJsonValue>> VarsArray;
