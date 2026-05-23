@@ -77,14 +77,25 @@ def extract_all(content_path: str, output_dir: str,
     output_dir = os.path.expanduser(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    # 扫描蓝图资产 — 使用正确的 AssetRegistry API
+    # 扫描蓝图资产 — 使用 ARFilter (UE 5.4+ 兼容)
     asset_registry = unreal.AssetRegistryHelpers.get_asset_registry()
-    search_options = unreal.AssetRegistrySearchOptions()
-    search_options.set_editor_property("package_path", content_path)
-    search_options.set_editor_property("recursive_paths", recursive)
-    search_options.set_editor_property("asset_class", "Blueprint")
 
-    assets = asset_registry.get_assets(search_options)
+    try:
+        # UE 5.1+ 推荐：class_paths (TopLevelAssetPath)
+        ar_filter = unreal.ARFilter(
+            package_paths=[content_path],
+            class_paths=[unreal.TopLevelAssetPath("/Script/Engine", "Blueprint")],
+            recursive_paths=recursive,
+        )
+        assets = asset_registry.get_assets(ar_filter)
+    except (TypeError, AttributeError):
+        # 老版本降级：class_names (FName 字符串)
+        ar_filter = unreal.ARFilter(
+            package_paths=[content_path],
+            class_names=["Blueprint"],
+            recursive_paths=recursive,
+        )
+        assets = asset_registry.get_assets(ar_filter)
     results = []
 
     for asset_data in assets:

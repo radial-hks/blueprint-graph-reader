@@ -10,8 +10,13 @@ import sys
 from typing import Optional
 
 
-def graph_to_mermaid(graph_data: dict) -> str:
-    """将整个蓝图转换为 Mermaid flowchart"""
+def graph_to_mermaid(graph_data: dict, pin_name_map: Optional[dict] = None) -> str:
+    """将整个蓝图转换为 Mermaid flowchart
+
+    Args:
+        graph_data: 蓝图 JSON 数据
+        pin_name_map: 可选的全局 pin_id→pin_name 映射；未提供时按每个 graph 内部构建
+    """
     lines = ["flowchart TD"]
 
     for graph in graph_data.get("graphs", []):
@@ -26,9 +31,16 @@ def graph_to_mermaid(graph_data: dict) -> str:
         # 节点映射
         node_map = {n["id"]: n for n in nodes}
         pin_map = {}
+        local_pin_name_map: dict = {}
         for node in nodes:
             for pin in node.get("pins", []):
                 pin_map[pin["id"]] = node["id"]
+                local_pin_name_map[pin["id"]] = pin.get("name", "")
+
+        # 合并外部传入的 pin_name_map（若有）
+        effective_pin_name_map = dict(local_pin_name_map)
+        if pin_name_map:
+            effective_pin_name_map.update(pin_name_map)
 
         # 输出节点
         for node in nodes:
@@ -97,9 +109,9 @@ def graph_to_mermaid(graph_data: dict) -> str:
             safe_from = from_node.replace(" ", "_")
             safe_to = to_node.replace(" ", "_")
 
-            # 从 pin name 提取标签
-            from_label = from_pin.split("_", 1)[-1] if "_" in from_pin else ""
-            to_label = to_pin.split("_", 1)[-1] if "_" in to_pin else ""
+            # 从 pin_name_map 反查 pin 名称（纯序号 pin id 无法从字符串提取）
+            from_label = effective_pin_name_map.get(from_pin, "")
+            to_label = effective_pin_name_map.get(to_pin, "")
 
             edge_label = from_label or to_label
             label_str = f"|{edge_label}|" if edge_label and edge_label not in ("", "exec") else ""

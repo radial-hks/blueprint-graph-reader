@@ -9,6 +9,9 @@
 #include "K2Node.h"
 #include "Kismet/EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
+#include "Engine/TimelineTemplate.h"
 #include "UObject/UnrealType.h"
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonSerializer.h"
@@ -64,9 +67,9 @@ FString UBlueprintGraphReader::ExtractBlueprintAsJson(UBlueprint* Blueprint)
 
         // Flags
         VarObj->SetBoolField("instance_editable",
-            Var.PropertyFlags & CPF_Edit);
+            (Var.PropertyFlags & CPF_Edit) != 0);
         VarObj->SetBoolField("expose_on_spawn",
-            Var.PropertyFlags & CPF_ExposeOnSpawn);
+            (Var.PropertyFlags & CPF_ExposeOnSpawn) != 0);
 
         VarsArray.Add(MakeShared<FJsonValueObject>(VarObj));
     }
@@ -74,13 +77,14 @@ FString UBlueprintGraphReader::ExtractBlueprintAsJson(UBlueprint* Blueprint)
 
     // Graphs - Ubergraph pages (EventGraph 等)
     int32 NodeIdCounter = 0;
+    int32 PinIdCounter = 0;
     TArray<TSharedPtr<FJsonValue>> GraphsArray;
 
     for (UEdGraph* Graph : Blueprint->UbergraphPages)
     {
         if (Graph)
         {
-            TSharedPtr<FJsonObject> GraphObj = SerializeGraph(Graph, NodeIdCounter);
+            TSharedPtr<FJsonObject> GraphObj = SerializeGraph(Graph, NodeIdCounter, PinIdCounter);
             GraphObj->SetStringField("graph_type", "ubergraph");
             GraphsArray.Add(MakeShared<FJsonValueObject>(GraphObj));
         }
@@ -91,7 +95,7 @@ FString UBlueprintGraphReader::ExtractBlueprintAsJson(UBlueprint* Blueprint)
     {
         if (Graph)
         {
-            TSharedPtr<FJsonObject> GraphObj = SerializeGraph(Graph, NodeIdCounter);
+            TSharedPtr<FJsonObject> GraphObj = SerializeGraph(Graph, NodeIdCounter, PinIdCounter);
             // 标记 Construction Script
             FString GraphType = (Graph->GetName() == TEXT("ConstructionScript"))
                 ? TEXT("construction_script") : TEXT("function");
@@ -105,13 +109,83 @@ FString UBlueprintGraphReader::ExtractBlueprintAsJson(UBlueprint* Blueprint)
     {
         if (Graph)
         {
-            TSharedPtr<FJsonObject> GraphObj = SerializeGraph(Graph, NodeIdCounter);
+            TSharedPtr<FJsonObject> GraphObj = SerializeGraph(Graph, NodeIdCounter, PinIdCounter);
             GraphObj->SetStringField("graph_type", "delegate_signature");
             GraphsArray.Add(MakeShared<FJsonValueObject>(GraphObj));
         }
     }
 
+    // Macro graphs — 复用 SerializeGraph
+    if (Blueprint->MacroGraphs.Num() > 0)
+    {
+        TArray<TSharedPtr<FJsonValue>> MacroArray;
+        for (UEdGraph* Graph : Blueprint->MacroGraphs)
+        {
+            if (!Graph) continue;
+            TSharedPtr<FJsonObject> GraphObj = SerializeGraph(Graph, NodeIdCounter, PinIdCounter);
+            GraphObj->SetStringField("graph_type", "macro");
+            MacroArray.Add(MakeShared<FJsonValueObject>(GraphObj));
+        }
+        RootJson->SetArrayField("macro_graphs", MacroArray);
+    }
+
     RootJson->SetArrayField("graphs", GraphsArray);
+
+    // SCS components — 组件树
+    if (Blueprint->SimpleConstructionScript)
+    {
+        TArray<TSharedPtr<FJsonValue>> ComponentsArray;
+        for (USCS_Node* SCSNode : Blueprint->SimpleConstructionScript->GetAllNodes())
+        {
+            if (!SCSNode) continue;
+            TSharedPtr<FJsonObject> CompObj = MakeShared<FJsonObject>();
+            CompObj->SetStringField("class",
+                SCSNode->ComponentClass ? SCSNode->ComponentClass->GetName() : FString());
+            CompObj->SetStringField("name", SCSNode->GetVariableName().ToString());
+            if (SCSNode->ComponentTemplate)
+            {
+                CompObj->SetStringField("template_name", SCSNode->ComponentTemplate->GetName());
+            }
+            CompObj->SetNumberField("child_index", SCSNode->ChildIndex);
+            ComponentsArray.Add(MakeShared<FJsonValueObject>(CompObj));
+        }
+        RootJson->SetArrayField("components", ComponentsArray);
+    }
+
+    // Timelines
+    {
+        TArray<TSharedPtr<FJsonValue>> TimelinesArray;
+        for (UTimelineTemplate* TL : Blueprint->Timelines)
+        {
+            if (!TL) continue;
+            TSharedPtr<FJsonObject> TLObj = MakeShared<FJsonObject>();
+            TLObj->SetStringField("name", TL->GetName());
+            TLObj->SetBoolField("loop", TL->bLoop);
+            TLObj->SetNumberField("length", TL->TimelineLength);
+            TimelinesArray.Add(MakeShared<FJsonValueObject>(TLObj));
+        }
+        if (TimelinesArray.Num() > 0)
+        {
+            RootJson->SetArrayField("timelines", TimelinesArray);
+        }
+    }
+
+    // Implemented interfaces
+    {
+        TArray<TSharedPtr<FJsonValue>> InterfacesArray;
+        for (const FBPInterfaceDescription& II : Blueprint->ImplementedInterfaces)
+        {
+            if (!II.Interface) continue;
+            TSharedPtr<FJsonObject> IObj = MakeShared<FJsonObject>();
+            IObj->SetStringField("name", II.Interface->GetName());
+            IObj->SetNumberField("graph_count", II.Graphs.Num());
+            InterfacesArray.Add(MakeShared<FJsonValueObject>(IObj));
+        }
+        if (InterfacesArray.Num() > 0)
+        {
+            RootJson->SetArrayField("interfaces", InterfacesArray);
+        }
+    }
 
     // Serialize to string
     FString Output;
@@ -234,45 +308,43 @@ TArray<FString> UBlueprintGraphReader::GetBlueprintVariables(UBlueprint* Bluepri
 // 内部序列化
 // ============================================================================
 
-TSharedPtr<FJsonObject> UBlueprintGraphReader::SerializeGraph(UEdGraph* Graph, int32 StartNodeId)
+TSharedPtr<FJsonObject> UBlueprintGraphReader::SerializeGraph(UEdGraph* Graph, int32& NodeIdCounter, int32& PinIdCounter)
 {
     TSharedPtr<FJsonObject> GraphObj = MakeShared<FJsonObject>();
     GraphObj->SetStringField("name", Graph->GetName());
 
     // Phase 1: 先构建 PinIdMap — Pin 指针 → 唯一序号 ID
     TMap<UEdGraphPin*, FString> PinIdMap;
-    int32 PinIdx = 0;
 
-    int32 NodeIdx = StartNodeId;
     for (UEdGraphNode* Node : Graph->Nodes)
     {
         if (!Node) continue;
 
+        // 注意: hidden pin 也加入 PinIdMap, 以便 edge 提取时能解析 LinkedTo 指针
+        // (如 self pin 常为 hidden, 但仍可能是 edge endpoint)
+        // SerializePin 阶段仍跳过 hidden pin, 保持 JSON 精简
         for (UEdGraphPin* Pin : Node->Pins)
         {
-            if (!Pin || Pin->bHidden) continue;
-            FString PinId = FString::Printf(TEXT("p%d"), PinIdx);
+            if (!Pin) continue;
+            FString PinId = FString::Printf(TEXT("p%d"), PinIdCounter);
             PinIdMap.Add(Pin, PinId);
-            PinIdx++;
+            PinIdCounter++;
         }
-
-        NodeIdx++;
     }
 
     // Phase 2: 序列化节点（通过 PinIdMap 查找 Pin ID）
     TArray<TSharedPtr<FJsonValue>> NodesArray;
     TArray<TSharedPtr<FJsonValue>> EdgesArray;
 
-    NodeIdx = StartNodeId;
     for (UEdGraphNode* Node : Graph->Nodes)
     {
         if (!Node) continue;
 
-        FString NodeId = FString::Printf(TEXT("n%d"), NodeIdx);
+        FString NodeId = FString::Printf(TEXT("n%d"), NodeIdCounter);
         TSharedPtr<FJsonObject> NodeObj = SerializeNode(Node, NodeId, PinIdMap);
         NodesArray.Add(MakeShared<FJsonValueObject>(NodeObj));
 
-        NodeIdx++;
+        NodeIdCounter++;
     }
 
     // Phase 3: 边提取
@@ -358,8 +430,9 @@ void UBlueprintGraphReader::ExtractEdges(UEdGraph* Graph,
 
         for (UEdGraphPin* Pin : Node->Pins)
         {
-            if (!Pin || Pin->bHidden) continue;
+            if (!Pin) continue;
             if (Pin->Direction != EGPD_Output) continue; // 只从 output pin 出发
+            // 注意: 不跳过 hidden pin — hidden pin 可能是合法 edge endpoint (如 self pin)
 
             FString* FromPinId = PinIdMap.Find(Pin);
             if (!FromPinId) continue;

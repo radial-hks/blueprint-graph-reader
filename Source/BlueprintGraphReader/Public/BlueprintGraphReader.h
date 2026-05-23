@@ -71,7 +71,7 @@ public:
 
 private:
     /** 将单个 EdGraph 序列化为 FJsonObject */
-    static TSharedPtr<FJsonObject> SerializeGraph(UEdGraph* Graph, int32 StartNodeId = 0);
+    static TSharedPtr<FJsonObject> SerializeGraph(UEdGraph* Graph, int32& NodeIdCounter, int32& PinIdCounter);
 
     /** 将单个 EdGraphNode 序列化为 FJsonObject（通过 PinIdMap 查找 Pin ID） */
     static TSharedPtr<FJsonObject> SerializeNode(UEdGraphNode* Node, const FString& NodeId,

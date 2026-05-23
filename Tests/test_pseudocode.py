@@ -37,8 +37,8 @@ def make_simple_blueprint():
                         "comment": "初始化",
                         "position": [100, 200],
                         "pins": [
-                            {"id": "n0_exec", "name": "", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True},
-                            {"id": "n0_self", "name": "self", "direction": "output", "pin_type": "object", "sub_type": "Actor", "default_value": "", "is_exec": False}
+                            {"id": "p0", "name": "", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True},
+                            {"id": "p1", "name": "self", "direction": "output", "pin_type": "object", "sub_type": "Actor", "default_value": "", "is_exec": False}
                         ]
                     },
                     {
@@ -48,10 +48,10 @@ def make_simple_blueprint():
                         "comment": "",
                         "position": [400, 200],
                         "pins": [
-                            {"id": "n1_exec_in", "name": "", "direction": "input", "pin_type": "exec", "default_value": "", "is_exec": True},
-                            {"id": "n1_condition", "name": "Condition", "direction": "input", "pin_type": "bool", "default_value": "false", "is_exec": False},
-                            {"id": "n1_true", "name": "True", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True},
-                            {"id": "n1_false", "name": "False", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True}
+                            {"id": "p2", "name": "", "direction": "input", "pin_type": "exec", "default_value": "", "is_exec": True},
+                            {"id": "p3", "name": "Condition", "direction": "input", "pin_type": "bool", "default_value": "false", "is_exec": False},
+                            {"id": "p4", "name": "True", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True},
+                            {"id": "p5", "name": "False", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True}
                         ]
                     },
                     {
@@ -61,9 +61,9 @@ def make_simple_blueprint():
                         "comment": "",
                         "position": [700, 150],
                         "pins": [
-                            {"id": "n2_exec_in", "name": "", "direction": "input", "pin_type": "exec", "default_value": "", "is_exec": True},
-                            {"id": "n2_string", "name": "InString", "direction": "input", "pin_type": "string", "default_value": "Hello", "is_exec": False},
-                            {"id": "n2_exec_out", "name": "", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True}
+                            {"id": "p6", "name": "", "direction": "input", "pin_type": "exec", "default_value": "", "is_exec": True},
+                            {"id": "p7", "name": "InString", "direction": "input", "pin_type": "string", "default_value": "Hello", "is_exec": False},
+                            {"id": "p8", "name": "", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True}
                         ]
                     },
                     {
@@ -73,15 +73,15 @@ def make_simple_blueprint():
                         "comment": "",
                         "position": [700, 300],
                         "pins": [
-                            {"id": "n3_exec_in", "name": "", "direction": "input", "pin_type": "exec", "default_value": "", "is_exec": True},
-                            {"id": "n3_string", "name": "InString", "direction": "input", "pin_type": "string", "default_value": "Not Found", "is_exec": False}
+                            {"id": "p9", "name": "", "direction": "input", "pin_type": "exec", "default_value": "", "is_exec": True},
+                            {"id": "p10", "name": "InString", "direction": "input", "pin_type": "string", "default_value": "Not Found", "is_exec": False}
                         ]
                     }
                 ],
                 "edges": [
-                    {"from_pin": "n0_exec", "to_pin": "n1_exec_in", "edge_type": "exec"},
-                    {"from_pin": "n1_true", "to_pin": "n2_exec_in", "edge_type": "exec"},
-                    {"from_pin": "n1_false", "to_pin": "n3_exec_in", "edge_type": "exec"}
+                    {"from_pin": "p0", "to_pin": "p2", "edge_type": "exec"},
+                    {"from_pin": "p4", "to_pin": "p6", "edge_type": "exec"},
+                    {"from_pin": "p5", "to_pin": "p9", "edge_type": "exec"}
                 ]
             }
         ]
@@ -107,7 +107,7 @@ def make_loop_blueprint():
                         "comment": "",
                         "position": [100, 200],
                         "pins": [
-                            {"id": "n0_exec", "name": "", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True}
+                            {"id": "p0", "name": "", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True}
                         ]
                     },
                     {
@@ -117,10 +117,10 @@ def make_loop_blueprint():
                         "comment": "",
                         "position": [400, 200],
                         "pins": [
-                            {"id": "n1_exec_in", "name": "", "direction": "input", "pin_type": "exec", "default_value": "", "is_exec": True},
-                            {"id": "n1_array", "name": "Array", "direction": "input", "pin_type": "object", "default_value": "", "is_exec": False},
-                            {"id": "n1_body", "name": "LoopBody", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True},
-                            {"id": "n1_done", "name": "Completed", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True}
+                            {"id": "p1", "name": "", "direction": "input", "pin_type": "exec", "default_value": "", "is_exec": True},
+                            {"id": "p2", "name": "Array", "direction": "input", "pin_type": "object", "default_value": "", "is_exec": False},
+                            {"id": "p3", "name": "LoopBody", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True},
+                            {"id": "p4", "name": "Completed", "direction": "output", "pin_type": "exec", "default_value": "", "is_exec": True}
                         ]
                     },
                     {
@@ -130,13 +130,13 @@ def make_loop_blueprint():
                         "comment": "",
                         "position": [700, 200],
                         "pins": [
-                            {"id": "n2_exec_in", "name": "", "direction": "input", "pin_type": "exec", "default_value": "", "is_exec": True}
+                            {"id": "p5", "name": "", "direction": "input", "pin_type": "exec", "default_value": "", "is_exec": True}
                         ]
                     }
                 ],
                 "edges": [
-                    {"from_pin": "n0_exec", "to_pin": "n1_exec_in", "edge_type": "exec"},
-                    {"from_pin": "n1_body", "to_pin": "n2_exec_in", "edge_type": "exec"}
+                    {"from_pin": "p0", "to_pin": "p1", "edge_type": "exec"},
+                    {"from_pin": "p3", "to_pin": "p5", "edge_type": "exec"}
                 ]
             }
         ]

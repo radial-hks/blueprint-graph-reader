@@ -4,6 +4,7 @@ public class BlueprintGraphReader : ModuleRules
 {
     public BlueprintGraphReader(ReadOnlyTargetRules Target) : base(Target)
     {
+        bUsesEditorAPIs = true;
         PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
         // Public include paths
@@ -22,15 +23,15 @@ public class BlueprintGraphReader : ModuleRules
         {
             "Core",
             "Engine",
-            "BlueprintGraph",
-            "UnrealEd",
-            "Json",
-            "JsonUtilities",
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]
         {
             "CoreUObject",
+            "BlueprintGraph",
+            "UnrealEd",
+            "Json",
+            "JsonUtilities",
             "EditorScriptingUtilities",
             "Kismet",
         });
