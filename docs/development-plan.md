@@ -20,8 +20,8 @@
 ### 任务清单
 
 - [x] 1.1 创建 UE 插件项目结构
-  - `BlueprintGraphReader.Build.cs`：模块依赖 Engine, BlueprintGraph, UnrealEd, Json, JsonUtilities, Kismet, CoreUObject, EditorScriptingUtilities
-  - `BlueprintGraphReader.h`：接口声明
+  - `BlueprintGraphReader.Build.cs`：模块依赖 Core, Engine, BlueprintGraph, UnrealEd, Json, JsonUtilities, Kismet, CoreUObject, EditorScriptingUtilities
+  - `BlueprintGraphReader.h`：接口声明（6 个公开函数 + 私有序列化辅助）
   - `BlueprintGraphReader.cpp`：实现
 
 - [x] 1.2 实现核心读取函数
@@ -33,15 +33,20 @@
   - `GetBlueprintVariables(UBlueprint*)`：获取变量列表
 
 - [x] 1.3 实现图序列化
-  - `SerializeGraph(UEdGraph*, int32 StartNodeId)`：将单个 EdGraph 序列化为 FJsonObject
+  - `SerializeGraph(UEdGraph*, NodeIdCounter, PinIdCounter)`：将单个 EdGraph 序列化为 FJsonObject
   - `SerializeNode(UEdGraphNode*, NodeId, PinIdMap)`：将单个节点序列化（Pin ID 通过 PinIdMap 统一查找）
   - `SerializePin(UEdGraphPin*, PinId)`：将单个 Pin 序列化
   - `ExtractEdges(UEdGraph*, PinIdMap, EdgesArray)`：提取边，用 TPair<Pin*,Pin*> 去重
   - Pin ID 改为纯序号制（p0, p1, p2...），避免字符串碰撞
-  - NormalizeNodeClassName：移除 U 前缀 + _C 后缀
+  - NormalizeNodeClassName：移除 U 前缀（双大写模式）+ _C 后缀
   - GetPinTypeStringFromCategory：使用 UEdGraphSchema_K2 常量替代硬编码字符串
   - FullTitle 超过 256 字符时截断加省略号
-  - parent_class 为空时仍输出字段（空字符串而非省略）
+  - parent_class 为空时仍输出字段（null 而非省略）
+  - 新增 SCS 组件树序列化 → `components[]`
+  - 新增 Timeline 模板序列化 → `timelines[]`
+  - 新增接口序列化 → `interfaces[]`
+  - 新增宏图序列化 → `macro_graphs[]`
+  - Hidden pin 仍加入 PinIdMap（用于 edge 提取），SerializePin 阶段跳过
 
 - [ ] 1.4 编译测试
   - 在 UE 5.4/5.5 编辑器中加载插件
@@ -54,6 +59,7 @@
 K2Node 子类名提取:
   Node->GetClass()->GetName()
   → 返回 "K2Node_Event", "K2Node_CallFunction" 等
+  → NormalizeNodeClassName 移除 U 前缀和 _C 后缀
 
 Pin 连接遍历:
   for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
@@ -69,6 +75,9 @@ Pin 方向:
 Pin 类型:
   Pin->PinType.PinCategory → 通过 UEdGraphSchema_K2 常量匹配
   Pin->PinType.PinSubCategoryObject → 具体类型 (如 Actor 类)
+
+Pin 去重:
+  TSet<TPair<UEdGraphPin*, UEdGraphPin*>> AddedEdges — 指针级去重
 ```
 
 ### 交付物
@@ -91,7 +100,7 @@ Pin 类型:
   - 输出：JSON 文件（按 Schema v1 规范）
   - 支持批量提取（扫描 Content Browser 下所有蓝图）
   - 延迟检测 C++ 插件（调用时而非导入时检测）
-  - AssetRegistry API 修复（使用 AssetRegistrySearchOptions）
+  - AssetRegistry API 修复（优先 class_paths，降级 class_names）
 
 - [x] 2.2 实现回退模式（无 C++ 插件时）
   - 检测插件是否可用
@@ -112,6 +121,9 @@ extract_blueprint.extract("/Game/Blueprints/BP_Enemy", output_path="~/bp_enemy.j
 
 # 批量提取
 extract_blueprint.extract_all("/Game/Blueprints/", output_dir="~/blueprint_graphs/")
+
+# 命令行统计
+# python extract_blueprint.py blueprint.json --stats
 ```
 
 ### 交付物
@@ -130,50 +142,68 @@ extract_blueprint.extract_all("/Game/Blueprints/", output_dir="~/blueprint_graph
 ### 任务清单
 
 - [x] 3.1 实现核心遍历算法
-  - `find_entry_nodes()`：识别入口节点（K2Node_Event, K2Node_FunctionEntry, K2Node_CustomEvent）
-  - `trace_exec_flow()`：沿 exec pin DFS 遍历
-  - `resolve_data_input()`：沿 data pin 回溯，解析输入值的来源
+  - `_find_entry_nodes()`：识别入口节点（无 exec 输入连线的节点）
+  - `_trace_exec_flow()`：沿 exec pin DFS 遍历
+  - `_resolve_data_input()`：沿 data pin 回溯，解析输入值的来源
+  - 每个入口节点独立 `visited` 集合
+  - DFS 深度限制 `MAX_DFS_DEPTH = 50`
 
-- [x] 3.2 处理关键节点类型
+- [x] 3.2 处理关键节点类型（22 个 handler）
 
-  | 节点类型 | 伪代码输出 |
-  |---------|-----------|
-  | K2Node_Event | `Event BeginPlay:` |
-  | K2Node_FunctionEntry | `function MyFunc(param1, param2):` |
-  | K2Node_IfThenElse | `if Condition:` / `else:` |
-  | K2Node_ForEachLoop | `for item in Array:` |
-  | K2Node_WhileLoop | `while Condition:` |
-  | K2Node_CallFunction | `FunctionName(arg1, arg2)` |
-  | K2Node_VariableGet | `VarName` |
-  | K2Node_VariableSet | `VarName = Value` |
-  | K2Node_ReturnNode | `return Value` |
-  | K2Node_Switch* | `switch (Value):` / `case X:` |
-  | K2Node_SpawnActor | `SpawnActor(Class, Location)` |
-  | K2Node_MacroInstance | `MacroName(args)` （递归展开） |
-  | K2Node_Sequence | `Sequence:` / `Then 0:` / `Then 1:` |
-  | K2Node_CustomEvent | `event CustomEvent:` |
-  | K2Node_DynamicCast | `cast Type(Object):` / `catch (cast failed):` |
-  | K2Node_CallParentFunction | `super::FunctionName` |
-  | K2Node_MakeStruct | `MakeStruct(...)` |
-  | K2Node_BreakStruct | `break StructName` |
+  | 节点类型 | handler | 伪代码输出 |
+  |---------|---------|-----------|
+  | K2Node_Event | `handle_event` | `Event BeginPlay:` |
+  | K2Node_FunctionEntry | `handle_function_entry` | `function MyFunc(param1, param2):` |
+  | K2Node_CustomEvent | `handle_custom_event` | `event CustomEvent:` |
+  | K2Node_IfThenElse | `handle_branch` | `if Condition:` / `else:` |
+  | K2Node_ForEachLoop | `handle_for_each` | `for item in Array:` |
+  | K2Node_WhileLoop | `handle_while_loop` | `while Condition:` |
+  | K2Node_CallFunction | `handle_call_function` | `FunctionName(arg=val)` |
+  | K2Node_VariableGet | `handle_variable_get` | `VarName` |
+  | K2Node_VariableSet | `handle_variable_set` | `VarName = Value` |
+  | K2Node_ReturnNode | `handle_return` | `return Value` |
+  | K2Node_SpawnActorFromClass | `handle_spawn_actor` | `SpawnActor ...` |
+  | K2Node_Knot | `handle_knot` | *(透传，不输出)* |
+  | K2Node_MacroInstance | `handle_macro_instance` | `macro Title:` 或 `for item in ...` |
+  | K2Node_Timeline | `handle_timeline` | `timeline Title:` / `on Update:` |
+  | K2Node_BaseAsyncTask | `handle_async_task` | `async Title:` / `on Completed:` |
+  | K2Node_AsyncAction | `handle_async_action` | `async Title:` / `on Completed:` |
+  | K2Node_ExecutionSequence | `handle_sequence` | `sequence:` / `step 0:` |
+  | K2Node_Switch | `handle_switch` | `switch Value:` / `case X:` |
+  | K2Node_CallParentFunction | `handle_call_parent` | `super::Title` |
+  | K2Node_DynamicCast | `handle_dynamic_cast` | `cast Type(Object):` / `catch (cast failed):` |
+  | K2Node_MakeStruct | `handle_make_struct` | `MakeStruct(...)` |
+  | K2Node_BreakStruct | `handle_break_struct` | `break StructName` |
+
+  未匹配的节点类型 fallback 为 `K2Node_XXX: title`。
 
 - [x] 3.3 处理复杂情况
-  - **循环检测**：每个入口独立 visited 集合（W6），DFS 深度限制 50（W7）
-  - **并行分支**：Sequence 节点的多个 Then 输出
-  - **宏展开**：K2Node_MacroInstance 递归解析内部图
+  - **循环检测**：每个入口独立 visited 集合，同一节点可出现在不同入口路径中
+  - **DFS 深度限制**：MAX_DFS_DEPTH=50，超限时停止递归
+  - **并行分支**：Sequence/IfThenElse/Switch/DynamicCast 的每个分支独立 visited.copy()
+  - **宏展开**：K2Node_MacroInstance 自动识别 ForEachLoop 宏，复用循环逻辑
   - **注释保留**：NodeComment 作为行内注释输出
   - **默认值展开**：未连接的 data pin 使用 DefaultValue
   - **Pin ID 映射**：纯序号 pin id 通过 pin_name_map 查找名称
+  - **Knot 透传**：K2Node_Knot 直接追踪下游，不输出
 
 - [x] 3.4 单元测试
   - 构造简单的 JSON 图结构 fixture
   - 验证每种节点类型的伪代码输出
   - 验证嵌套结构（if 内嵌 if，loop 内嵌 if）
+  - 8/8 测试通过
 
 ### 伪代码输出示例
 
 ```
-graph EventGraph:
+blueprint /Game/Blueprints/BP_Enemy
+  parent: Actor
+
+variables:
+  float Health = 100.0 [editable]
+  Actor PlayerRef
+
+graph EventGraph (ubergraph):
 
   Event BeginPlay:
     # 检查玩家引用是否有效
@@ -184,8 +214,8 @@ graph EventGraph:
       PrintString("Player not found")
 
   Event SpawnEnemy:
-    enemy = SpawnActor(EnemyClass, SpawnLocation)
-    enemy.Health = 100.0
+    SpawnActor(...)
+    Health = 100.0
     PrintString("Enemy spawned!")
 
 function TakeDamage(Amount: float):
@@ -199,7 +229,7 @@ function TakeDamage(Amount: float):
 ### 交付物
 
 - `Python/graph_to_pseudocode.py`
-- `Tests/test_pseudocode.py`（含 fixture 和测试用例）
+- `Tests/test_pseudocode.py`（含 fixture 和测试用例，8/8 通过）
 
 ---
 
@@ -213,30 +243,21 @@ function TakeDamage(Amount: float):
 
 - [x] 4.1 实现 `graph_to_mermaid.py`
   - 节点 → Mermaid 方框（显示 node.class + node.title）
-  - exec 边 → 实线箭头
-  - data 边 → 虚线箭头
-  - 自动布局提示（利用 NodePosX/Y）
+  - 每个图作为 subgraph
+  - exec 边 → 实线箭头 `-->`
+  - data 边 → 虚线箭头 `-.->`
+  - 支持 pin_name_map 参数
 
 - [x] 4.2 实现 `graph_to_graphify.py`
+  - 蓝图本身 → graphify node（type=blueprint）
   - 蓝图节点 → graphify node（带 class、title 属性）
   - Pin 连接 → graphify edge（带 edge_type 标签）
   - 变量 → graphify node（type=variable）
-  - Pin-to-Node 映射改为安全方式（通过 pin_to_node dict，不再 rsplit）
+  - Pin-to-Node 映射通过 pin_to_node dict 安全查找
 
 - [ ] 4.3 验证
   - Mermaid 输出在 VS Code 预览中正确渲染
   - graphify 图谱可查询，返回预期结果
-
-### Mermaid 输出示例
-
-```mermaid
-flowchart TD
-    n0["🎬 Event BeginPlay"] -->|exec| n1{"IsValid?"}
-    n1 -->|True| n2["⏱ Set Timer 2s"]
-    n1 -->|False| n3["💬 PrintString"]
-    n2 -->|exec| n4["🎮 SpawnEnemy"]
-    n3 -.->|data| n5["PlayerRef"]
-```
 
 ### 交付物
 
@@ -253,19 +274,23 @@ flowchart TD
 
 ### 任务清单
 
-- [ ] 5.1 实现子图摘要
-  - 从每个入口节点到终止节点提取"子图路径"
-  - 用 LLM 为每条路径生成一行自然语言摘要
-  - 摘要插入伪代码对应位置
+- [x] 5.1 实现子图摘要
+  - 从伪代码按 graph/function 分段，批量调 LLM 生成一行自然语言摘要
+  - 摘要注回伪代码对应位置（`# [摘要] ...` 注释行）
 
-- [ ] 5.2 实现"蓝图问答"接口
+- [x] 5.2 实现"蓝图问答"接口
   - 输入：蓝图 JSON + 自然语言问题
-  - LLM 基于伪代码回答（而非原始 JSON，降低 Token 消耗）
-  - 示例："BP_Enemy 死亡时做了什么？" → "调用 Die() 函数，播放死亡动画，销毁 Actor"
+  - LLM 基于伪代码+摘要回答（而非原始 JSON，降低 Token 消耗）
+  - 示例：\"BP_Enemy 死亡时做了什么？\" → \"调用 Die() 函数，播放死亡动画，销毁 Actor\"
 
-- [ ] 5.3 Token 效率优化
-  - 按需加载：只发送 Agent 当前关注的子图（而非整个蓝图）
-  - 缓存：同一蓝图的伪代码只生成一次
+- [x] 5.3 Token 效率优化
+  - 按需加载：`extract_subgraph_context()` 只发送 Agent 当前关注的子图
+  - 缓存：SHA256 哈希缓存 LLM 响应（asset_path + section + model + task）
+  - 截断：超长子图自动截断 + 行数提示
+
+- [x] 5.4 单元测试 + CLI
+  - 21/21 测试通过（分段、摘要解析、缓存、增强注回、子图提取、集成流程）
+  - CLI: `python3 -m semantic_enhancer <json> --summarize/--enhance/--ask/--subgraph`
 
 ### 交付物
 
@@ -289,6 +314,18 @@ Week 2
 
 ---
 
+## 当前状态
+
+| Phase | 状态 | 备注 |
+|-------|------|------|
+| Phase 1 | 代码完成 | 1.4 编译测试待真实 UE 环境验证 |
+| Phase 2 | 代码完成 | 2.3 验证待真实蓝图对比 |
+| Phase 3 | 完成 | 8/8 测试通过，22 个 handler |
+| Phase 4 | 代码完成 | 4.3 验证待 Mermaid 渲染 + graphify 查询 |
+| Phase 5 | 代码完成 | 21/21 测试通过，5.4 编译测试待真实 UE 环境验证 |
+
+---
+
 ## 验收标准
 
 | 阶段 | 验收条件 |
@@ -305,8 +342,8 @@ Week 2
 
 | 风险 | 概率 | 影响 | 应对 |
 |------|------|------|------|
-| K2Node 子类过多，伪代码生成器遗漏 | 中 | 中 | 先覆盖 Top 20 常用节点类型，其余 fallback 为原始类名 |
+| K2Node 子类过多，伪代码生成器遗漏 | 中 | 中 | 22 个 handler 覆盖常用类型，未匹配 fallback 为原始类名 |
 | UE 版本升级导致 C++ API 变化 | 低 | 高 | 接口层隔离：C++ 只做薄包装，业务逻辑全在 Python |
-| 宏图/坍缩图递归展开导致深度过大 | 中 | 低 | 设置最大递归深度（MAX_DFS_DEPTH=50），超限时输出注释 |
+| 宏图/坍缩图递归展开导致深度过大 | 中 | 低 | MAX_DFS_DEPTH=50，超限时停止递归 |
 | 蓝图包含 C++ 原生事件绑定（非 K2Node） | 低 | 低 | 这类绑定在图结构中不可见，需额外文档补充 |
-| Pin ID 字符串碰撞导致错误连线 | 低 | 高 | 已改用纯序号制（p0, p1, ...），PinIdMap 统一 ID 生成 |
+| Pin ID 字符串碰撞导致错误连线 | 低 | 高 | 已改用纯序号制（p0, p1, ...），指针级边去重 |
