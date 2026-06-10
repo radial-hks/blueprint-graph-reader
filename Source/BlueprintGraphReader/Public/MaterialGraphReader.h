@@ -96,11 +96,6 @@ private:
         UMaterial* Material,
         const TMap<UMaterialExpression*, FString>& ExprIdMap);
 
-    /** 序列化 FExpressionInput 为内联 JSON 对象（含 connected_to） */
-    static TSharedPtr<FJsonObject> SerializeExpressionInput(
-        const FExpressionInput& Input,
-        const TMap<UMaterialExpression*, FString>& ExprIdMap);
-
     /** 序列化材质注释节点 */
     static TArray<TSharedPtr<FJsonValue>> SerializeComments(
         const TArray<UMaterialExpressionComment*>& Comments);
@@ -126,9 +121,6 @@ private:
 
     /** ESamplerSourceMode 枚举值 → 字符串 */
     static FString GetSamplerSourceName(int64 SamplerSource);
-
-    /** FMaterialProperty 枚举值 → 属性名称字符串 */
-    static FString GetMaterialPropertyName(EMaterialProperty Property);
 
     /** 表达式标题最大长度（超过时截断并加省略号） */
     static constexpr int32 MaxTitleLength = 256;

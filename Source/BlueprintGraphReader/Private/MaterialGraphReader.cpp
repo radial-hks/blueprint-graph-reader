@@ -433,34 +433,6 @@ TSharedPtr<FJsonObject> UMaterialGraphReader::SerializeMaterialProperties(
     return PropsObj;
 }
 
-TSharedPtr<FJsonObject> UMaterialGraphReader::SerializeExpressionInput(
-    const FExpressionInput& Input,
-    const TMap<UMaterialExpression*, FString>& ExprIdMap)
-{
-    TSharedPtr<FJsonObject> InputObj = MakeShared<FJsonObject>();
-
-    if (Input.Expression)
-    {
-        const FString* UpstreamId = ExprIdMap.Find(Input.Expression);
-        if (UpstreamId)
-        {
-            InputObj->SetStringField("connected_to", *UpstreamId);
-        }
-        else
-        {
-            InputObj->SetField("connected_to", MakeShared<FJsonValueNull>());
-        }
-        InputObj->SetNumberField("output_index", Input.OutputIndex);
-    }
-    else
-    {
-        InputObj->SetField("connected_to", MakeShared<FJsonValueNull>());
-        InputObj->SetField("output_index", MakeShared<FJsonValueNull>());
-    }
-
-    return InputObj;
-}
-
 TArray<TSharedPtr<FJsonValue>> UMaterialGraphReader::SerializeComments(
     const TArray<UMaterialExpressionComment*>& Comments)
 {
@@ -772,7 +744,9 @@ FString UMaterialGraphReader::GetExpressionClassName(UMaterialExpression* Expr)
 
     FString ClassName = Expr->GetClass()->GetName();
 
-    // UE class names normally omit the leading U already; handle both forms.
+    // UMaterialExpression subclasses use the UE convention of U + ClassName.
+    // Strip the leading 'U' to get "MaterialExpressionAdd", "MaterialExpressionMultiply", etc.
+    // RightChopInline(N) removes N characters from the left side, keeping the right portion.
     static const FString Prefix = TEXT("UMaterialExpression");
     if (ClassName.StartsWith(Prefix))
     {
@@ -814,11 +788,6 @@ FString UMaterialGraphReader::GetExpressionTitle(UMaterialExpression* Expr)
     }
 
     return Title;
-}
-
-FString UMaterialGraphReader::GetMaterialPropertyName(EMaterialProperty Property)
-{
-    return StaticEnum<EMaterialProperty>()->GetNameStringByValue(static_cast<int64>(Property));
 }
 
 #undef LOCTEXT_NAMESPACE
