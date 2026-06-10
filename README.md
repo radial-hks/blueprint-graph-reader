@@ -1,6 +1,6 @@
 # Blueprint Graph Reader
 
-将 Unreal Engine 蓝图的节点图结构提取为 Agent 可读的 JSON 图结构，弥合"2D 可视节点图"与"1D 线性文本推理"之间的表示鸿沟。
+将 Unreal Engine 蓝图和材质的节点图结构提取为 Agent 可读的 JSON 图结构，弥合"2D 可视节点图"与"1D 线性文本推理"之间的表示鸿沟。
 
 ## 为什么需要这个项目？
 
@@ -264,6 +264,64 @@ C++ 插件通过 `UEdGraphSchema_K2` 常量映射 Pin 类别：
 
 未匹配的节点类型 fallback 为 `node.class: node.title`。
 
+## 材质图支持（Material Graph Reader）
+
+除蓝图外，本插件还支持读取 **UE 材质节点图**，覆盖 UMaterial、UMaterialFunction、UMaterialInstanceConstant 三种资产类型。
+
+### 架构差异
+
+材质图与蓝图图的核心区别在于数据模型：
+
+| | Blueprint | Material |
+|---|---|---|
+| 主数据源 | `UEdGraph` → `UK2Node` | `UMaterial::ExpressionCollection` → `UMaterialExpression` |
+| 连接模型 | `UEdGraphPin::LinkedTo` | `FExpressionInput::Expression + OutputIndex` |
+| 控制流 | exec/data 双引脚 | 无 exec（仅数据流） |
+
+### 快速开始
+
+```python
+# UE Python 控制台
+import extract_material
+
+# 提取单个材质
+extract_material.extract("/Game/Materials/M_Master", output_path="~/m_master.json")
+
+# 批量提取
+extract_material.extract_all("/Game/Materials/", output_dir="~/material_graphs/")
+```
+
+### Material JSON Schema (material-v1)
+
+```json
+{
+  "schema_version": "material-v1",
+  "asset_path": "/Game/Materials/M_Master.M_Master",
+  "material_type": "Material",
+  "shading_model": "MSM_DefaultLit",
+  "blend_mode": "BLEND_Opaque",
+  "properties": {
+    "BaseColor": {"connected_to": "e5", "output_index": 0},
+    "Metallic":  {"connected_to": null, "output_index": null}
+  },
+  "expressions": [
+    {
+      "id": "e0", "class": "MaterialExpressionMultiply", "title": "Multiply",
+      "position": [100, 200],
+      "inputs": [
+        {"name": "A", "type": "scalar", "connected_to": "e1", "output_index": 0}
+      ],
+      "outputs": ["Result"],
+      "properties": {}
+    }
+  ],
+  "material_functions": [{"name": "MF_Noise", "asset_path": "...", "called_from": ["e12"]}],
+  "comments": [{"text": "Main blending", "position": [-200, 100], "size": [400, 300]}]
+}
+```
+
+详细设计见 [docs/material-reader-plan.md](docs/material-reader-plan.md)。
+
 ## 项目结构
 
 ```
@@ -272,24 +330,28 @@ blueprint-graph-reader/
 ├── README.md
 ├── CLAUDE.md
 ├── docs/
-│   ├── proposal.md                 # 方案详解
-│   └── development-plan.md         # 开发计划
+│   ├── proposal.md                 # 蓝图方案详解
+│   ├── development-plan.md         # 蓝图开发计划
+│   └── material-reader-plan.md     # 材质图设计文档
 ├── Source/
 │   └── BlueprintGraphReader/       # UE C++ 插件源码
 │       ├── BlueprintGraphReader.Build.cs
 │       ├── Public/
-│       │   ├── BlueprintGraphReader.h       # 主 API（UBlueprintFunctionLibrary）
-│       │   └── BlueprintGraphReaderModule.h # 模块注册
+│       │   ├── BlueprintGraphReader.h       # 蓝图主 API
+│       │   ├── BlueprintGraphReaderModule.h # 模块注册
+│       │   └── MaterialGraphReader.h        # 材质主 API
 │       └── Private/
-│           ├── BlueprintGraphReader.cpp    # API 实现 + 序列化
-│           └── BlueprintGraphReaderModule.cpp
+│           ├── BlueprintGraphReader.cpp     # 蓝图 API 实现
+│           ├── BlueprintGraphReaderModule.cpp
+│           └── MaterialGraphReader.cpp      # 材质 API 实现
 ├── Python/
 │   ├── __init__.py
-│   ├── extract_blueprint.py        # 一键提取（UE Python → JSON 文件）
+│   ├── extract_blueprint.py        # 蓝图一键提取
+│   ├── extract_material.py         # 材质一键提取
 │   ├── graph_to_pseudocode.py      # JSON → 缩进伪代码
 │   ├── graph_to_mermaid.py         # JSON → Mermaid 流程图
 │   ├── graph_to_graphify.py        # JSON → graphify 知识图谱
-│   └── semantic_enhancer.py        # LLM 语义增强（摘要、问答、注解）
+│   └── semantic_enhancer.py        # LLM 语义增强
 └── Tests/
     ├── test_pseudocode.py          # 伪代码生成器单元测试（8/8 通过）
     └── test_semantic_enhancer.py   # 语义增强器单元测试（21/21 通过）
