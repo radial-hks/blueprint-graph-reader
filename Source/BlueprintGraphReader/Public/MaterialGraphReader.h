@@ -10,6 +10,9 @@
 class UMaterial;
 class UMaterialFunction;
 class UMaterialExpression;
+class UMaterialExpressionComment;
+class UMaterialExpressionTextureSample;
+class UMaterialInstanceConstant;
 
 /**
  * Material Graph Reader — 将材质节点图结构提取为 JSON 字符串，供 AI Agent 读取。
@@ -98,6 +101,14 @@ private:
         const FExpressionInput& Input,
         const TMap<UMaterialExpression*, FString>& ExprIdMap);
 
+    /** 序列化材质注释节点 */
+    static TArray<TSharedPtr<FJsonValue>> SerializeComments(
+        const TArray<UMaterialExpressionComment*>& Comments);
+
+    /** 序列化材质实例参数覆盖 */
+    static TSharedPtr<FJsonObject> SerializeMaterialInstanceParameterOverrides(
+        UMaterialInstanceConstant* Instance);
+
     /** 将 UMaterialExpression 类名标准化（去掉 UMaterialExpression 前缀） */
     static FString GetExpressionClassName(UMaterialExpression* Expr);
 
@@ -107,6 +118,15 @@ private:
     /** 为常见表达式类型提取额外 properties 字段 */
     static TSharedPtr<FJsonObject> SerializeExpressionProperties(UMaterialExpression* Expr);
 
+    /** 提取 TextureSample 公共属性 */
+    static TSharedPtr<FJsonObject> SerializeTextureSampleProperties(
+        UMaterialExpressionTextureSample* TexSample,
+        const FName* ParameterName = nullptr,
+        const FName* Group = nullptr);
+
+    /** ESamplerSourceMode 枚举值 → 字符串 */
+    static FString GetSamplerSourceName(int64 SamplerSource);
+
     /** FMaterialProperty 枚举值 → 属性名称字符串 */
     static FString GetMaterialPropertyName(EMaterialProperty Property);
 
@@ -115,4 +135,7 @@ private:
 
     /** Custom 节点 HLSL 代码截断长度 */
     static constexpr int32 MaxCodeLength = 2048;
+
+    /** Comment 文本截断长度 */
+    static constexpr int32 MaxCommentLength = 2048;
 };

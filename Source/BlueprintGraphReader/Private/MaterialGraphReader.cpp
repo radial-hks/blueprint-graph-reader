@@ -9,6 +9,8 @@
 #include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialExpressionTextureSample.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialExpressionTextureSampleParameterCube.h"
+#include "Materials/MaterialExpressionTextureSampleParameterVolume.h"
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialExpressionConstant.h"
@@ -68,13 +70,19 @@ FString UMaterialGraphReader::ExtractMaterialAsJson(UMaterialInterface* Material
     // Shading model & blend mode (from concrete material)
     RootJson->SetStringField("shading_model",
         StaticEnum<EMaterialShadingModel>()->GetNameStringByValue(
-            static_cast<int64>(ConcreteMaterial->ShadingModel)));
+            static_cast<int64>(ConcreteMaterial->GetShadingModels().GetFirstShadingModel())));
     RootJson->SetStringField("blend_mode",
         StaticEnum<EBlendMode>()->GetNameStringByValue(
             static_cast<int64>(ConcreteMaterial->BlendMode)));
 
     // Two-sided flag
     RootJson->SetBoolField("two_sided", ConcreteMaterial->TwoSided);
+
+    if (UMaterialInstanceConstant* MaterialInstance = Cast<UMaterialInstanceConstant>(MaterialInterface))
+    {
+        RootJson->SetObjectField("parameter_overrides",
+            SerializeMaterialInstanceParameterOverrides(MaterialInstance));
+    }
 
     // Build expression ID map (expression pointer → "e0", "e1", ...)
     TMap<UMaterialExpression*, FString> ExprIdMap;
@@ -114,39 +122,12 @@ FString UMaterialGraphReader::ExtractMaterialAsJson(UMaterialInterface* Material
     // Phase 4: Serialize comments
     if (Comments.Num() > 0)
     {
-        TArray<TSharedPtr<FJsonValue>> CommentsArray;
-        for (UMaterialExpressionComment* Comment : Comments)
-        {
-            if (!Comment) continue;
-            TSharedPtr<FJsonObject> CommentObj = MakeShared<FJsonObject>();
-            CommentObj->SetStringField("text", Comment->Text);
-
-            TArray<TSharedPtr<FJsonValue>> PosArr;
-            PosArr.Add(MakeShared<FJsonValueNumber>(Comment->MaterialExpressionEditorX));
-            PosArr.Add(MakeShared<FJsonValueNumber>(Comment->MaterialExpressionEditorY));
-            CommentObj->SetArrayField("position", PosArr);
-
-            TArray<TSharedPtr<FJsonValue>> SizeArr;
-            SizeArr.Add(MakeShared<FJsonValueNumber>(Comment->SizeX));
-            SizeArr.Add(MakeShared<FJsonValueNumber>(Comment->SizeY));
-            CommentObj->SetArrayField("size", SizeArr);
-
-            // Comment color
-            TArray<TSharedPtr<FJsonValue>> ColorArr;
-            ColorArr.Add(MakeShared<FJsonValueNumber>(Comment->CommentColor.R));
-            ColorArr.Add(MakeShared<FJsonValueNumber>(Comment->CommentColor.G));
-            ColorArr.Add(MakeShared<FJsonValueNumber>(Comment->CommentColor.B));
-            ColorArr.Add(MakeShared<FJsonValueNumber>(Comment->CommentColor.A));
-            CommentObj->SetArrayField("color", ColorArr);
-
-            CommentsArray.Add(MakeShared<FJsonValueObject>(CommentObj));
-        }
-        RootJson->SetArrayField("comments", CommentsArray);
+        RootJson->SetArrayField("comments", SerializeComments(Comments));
     }
 
     // Phase 5: Collect referenced material functions
     TArray<TSharedPtr<FJsonValue>> FuncArray;
-    TSet<FString> SeenFunctions;
+    TMap<UMaterialFunction*, TArray<FString>> FuncCallers;
 
     for (UMaterialExpression* Expr : SerializableExpressions)
     {
@@ -154,28 +135,28 @@ FString UMaterialGraphReader::ExtractMaterialAsJson(UMaterialInterface* Material
             Cast<UMaterialExpressionMaterialFunctionCall>(Expr);
         if (!FuncCall || !FuncCall->MaterialFunction) continue;
 
-        FString FuncPath = FuncCall->MaterialFunction->GetPathName();
-        if (SeenFunctions.Contains(FuncPath)) continue;
-        SeenFunctions.Add(FuncPath);
+        const FString* CallerId = ExprIdMap.Find(Expr);
+        if (CallerId)
+        {
+            FuncCallers.FindOrAdd(FuncCall->MaterialFunction).Add(*CallerId);
+        }
+    }
+
+    for (const TPair<UMaterialFunction*, TArray<FString>>& FuncPair : FuncCallers)
+    {
+        UMaterialFunction* MaterialFunction = FuncPair.Key;
+        if (!MaterialFunction) continue;
+
+        FString FuncPath = MaterialFunction->GetPathName();
 
         TSharedPtr<FJsonObject> FuncObj = MakeShared<FJsonObject>();
-        FuncObj->SetStringField("name", FuncCall->MaterialFunction->GetName());
+        FuncObj->SetStringField("name", MaterialFunction->GetName());
         FuncObj->SetStringField("asset_path", FuncPath);
 
-        // Find which expressions reference this function
         TArray<TSharedPtr<FJsonValue>> CalledFromArray;
-        for (UMaterialExpression* OtherExpr : SerializableExpressions)
+        for (const FString& CallerId : FuncPair.Value)
         {
-            UMaterialExpressionMaterialFunctionCall* OtherCall =
-                Cast<UMaterialExpressionMaterialFunctionCall>(OtherExpr);
-            if (OtherCall && OtherCall->MaterialFunction == FuncCall->MaterialFunction)
-            {
-                const FString* CallerId = ExprIdMap.Find(OtherExpr);
-                if (CallerId)
-                {
-                    CalledFromArray.Add(MakeShared<FJsonValueString>(*CallerId));
-                }
-            }
+            CalledFromArray.Add(MakeShared<FJsonValueString>(CallerId));
         }
         FuncObj->SetArrayField("called_from", CalledFromArray);
 
@@ -237,26 +218,7 @@ FString UMaterialGraphReader::ExtractMaterialFunctionAsJson(UMaterialFunction* F
     // Serialize comments
     if (Comments.Num() > 0)
     {
-        TArray<TSharedPtr<FJsonValue>> CommentsArray;
-        for (UMaterialExpressionComment* Comment : Comments)
-        {
-            if (!Comment) continue;
-            TSharedPtr<FJsonObject> CommentObj = MakeShared<FJsonObject>();
-            CommentObj->SetStringField("text", Comment->Text);
-
-            TArray<TSharedPtr<FJsonValue>> PosArr;
-            PosArr.Add(MakeShared<FJsonValueNumber>(Comment->MaterialExpressionEditorX));
-            PosArr.Add(MakeShared<FJsonValueNumber>(Comment->MaterialExpressionEditorY));
-            CommentObj->SetArrayField("position", PosArr);
-
-            TArray<TSharedPtr<FJsonValue>> SizeArr;
-            SizeArr.Add(MakeShared<FJsonValueNumber>(Comment->SizeX));
-            SizeArr.Add(MakeShared<FJsonValueNumber>(Comment->SizeY));
-            CommentObj->SetArrayField("size", SizeArr);
-
-            CommentsArray.Add(MakeShared<FJsonValueObject>(CommentObj));
-        }
-        RootJson->SetArrayField("comments", CommentsArray);
+        RootJson->SetArrayField("comments", SerializeComments(Comments));
     }
 
     // Serialize to string
@@ -449,12 +411,13 @@ TSharedPtr<FJsonObject> UMaterialGraphReader::SerializeMaterialProperties(
 
     // Direct member access on UMaterial for each property input
     SerializePropertyInput(Material->EmissiveColor,  TEXT("EmissiveColor"), PropsObj);
-    SerializePropertyInput(Material->DiffuseColor,   TEXT("DiffuseColor"), PropsObj);
     SerializePropertyInput(Material->BaseColor,      TEXT("BaseColor"), PropsObj);
     SerializePropertyInput(Material->Metallic,       TEXT("Metallic"), PropsObj);
     SerializePropertyInput(Material->Specular,       TEXT("Specular"), PropsObj);
     SerializePropertyInput(Material->Roughness,      TEXT("Roughness"), PropsObj);
     SerializePropertyInput(Material->Anisotropy,     TEXT("Anisotropy"), PropsObj);
+    SerializePropertyInput(Material->ClearCoat,      TEXT("ClearCoat"), PropsObj);
+    SerializePropertyInput(Material->ClearCoatRoughness, TEXT("ClearCoatRoughness"), PropsObj);
     SerializePropertyInput(Material->Normal,         TEXT("Normal"), PropsObj);
     SerializePropertyInput(Material->Tangent,        TEXT("Tangent"), PropsObj);
     SerializePropertyInput(Material->WorldPositionOffset, TEXT("WorldPositionOffset"), PropsObj);
@@ -498,6 +461,116 @@ TSharedPtr<FJsonObject> UMaterialGraphReader::SerializeExpressionInput(
     return InputObj;
 }
 
+TArray<TSharedPtr<FJsonValue>> UMaterialGraphReader::SerializeComments(
+    const TArray<UMaterialExpressionComment*>& Comments)
+{
+    TArray<TSharedPtr<FJsonValue>> CommentsArray;
+
+    for (UMaterialExpressionComment* Comment : Comments)
+    {
+        if (!Comment) continue;
+
+        TSharedPtr<FJsonObject> CommentObj = MakeShared<FJsonObject>();
+
+        FString Text = Comment->Text;
+        if (Text.Len() > MaxCommentLength)
+        {
+            Text = Text.Left(MaxCommentLength - 3) + TEXT("...");
+        }
+        CommentObj->SetStringField("text", Text);
+
+        TArray<TSharedPtr<FJsonValue>> PosArr;
+        PosArr.Add(MakeShared<FJsonValueNumber>(Comment->MaterialExpressionEditorX));
+        PosArr.Add(MakeShared<FJsonValueNumber>(Comment->MaterialExpressionEditorY));
+        CommentObj->SetArrayField("position", PosArr);
+
+        TArray<TSharedPtr<FJsonValue>> SizeArr;
+        SizeArr.Add(MakeShared<FJsonValueNumber>(Comment->SizeX));
+        SizeArr.Add(MakeShared<FJsonValueNumber>(Comment->SizeY));
+        CommentObj->SetArrayField("size", SizeArr);
+
+        TArray<TSharedPtr<FJsonValue>> ColorArr;
+        ColorArr.Add(MakeShared<FJsonValueNumber>(Comment->CommentColor.R));
+        ColorArr.Add(MakeShared<FJsonValueNumber>(Comment->CommentColor.G));
+        ColorArr.Add(MakeShared<FJsonValueNumber>(Comment->CommentColor.B));
+        ColorArr.Add(MakeShared<FJsonValueNumber>(Comment->CommentColor.A));
+        CommentObj->SetArrayField("color", ColorArr);
+
+        CommentsArray.Add(MakeShared<FJsonValueObject>(CommentObj));
+    }
+
+    return CommentsArray;
+}
+
+TSharedPtr<FJsonObject> UMaterialGraphReader::SerializeMaterialInstanceParameterOverrides(
+    UMaterialInstanceConstant* Instance)
+{
+    TSharedPtr<FJsonObject> OverridesObj = MakeShared<FJsonObject>();
+    if (!Instance) return OverridesObj;
+
+    auto SerializeParameterInfo = [](const FMaterialParameterInfo& ParameterInfo,
+                                     TSharedPtr<FJsonObject>& ParamObj)
+    {
+        ParamObj->SetStringField("name", ParameterInfo.Name.ToString());
+        if (const UEnum* AssociationEnum = StaticEnum<EMaterialParameterAssociation>())
+        {
+            ParamObj->SetStringField("association",
+                AssociationEnum->GetNameStringByValue(static_cast<int64>(ParameterInfo.Association)));
+        }
+        else
+        {
+            ParamObj->SetStringField("association", TEXT("Unknown"));
+        }
+        ParamObj->SetNumberField("index", ParameterInfo.Index);
+    };
+
+    TArray<TSharedPtr<FJsonValue>> ScalarArray;
+    for (const FScalarParameterValue& Param : Instance->ScalarParameterValues)
+    {
+        TSharedPtr<FJsonObject> ParamObj = MakeShared<FJsonObject>();
+        SerializeParameterInfo(Param.ParameterInfo, ParamObj);
+        ParamObj->SetNumberField("value", Param.ParameterValue);
+        ScalarArray.Add(MakeShared<FJsonValueObject>(ParamObj));
+    }
+    OverridesObj->SetArrayField("scalar", ScalarArray);
+
+    TArray<TSharedPtr<FJsonValue>> VectorArray;
+    for (const FVectorParameterValue& Param : Instance->VectorParameterValues)
+    {
+        TSharedPtr<FJsonObject> ParamObj = MakeShared<FJsonObject>();
+        SerializeParameterInfo(Param.ParameterInfo, ParamObj);
+
+        TArray<TSharedPtr<FJsonValue>> ValueArray;
+        ValueArray.Add(MakeShared<FJsonValueNumber>(Param.ParameterValue.R));
+        ValueArray.Add(MakeShared<FJsonValueNumber>(Param.ParameterValue.G));
+        ValueArray.Add(MakeShared<FJsonValueNumber>(Param.ParameterValue.B));
+        ValueArray.Add(MakeShared<FJsonValueNumber>(Param.ParameterValue.A));
+        ParamObj->SetArrayField("value", ValueArray);
+
+        VectorArray.Add(MakeShared<FJsonValueObject>(ParamObj));
+    }
+    OverridesObj->SetArrayField("vector", VectorArray);
+
+    TArray<TSharedPtr<FJsonValue>> TextureArray;
+    for (const FTextureParameterValue& Param : Instance->TextureParameterValues)
+    {
+        TSharedPtr<FJsonObject> ParamObj = MakeShared<FJsonObject>();
+        SerializeParameterInfo(Param.ParameterInfo, ParamObj);
+        if (Param.ParameterValue)
+        {
+            ParamObj->SetStringField("value", Param.ParameterValue->GetPathName());
+        }
+        else
+        {
+            ParamObj->SetField("value", MakeShared<FJsonValueNull>());
+        }
+        TextureArray.Add(MakeShared<FJsonValueObject>(ParamObj));
+    }
+    OverridesObj->SetArrayField("texture", TextureArray);
+
+    return OverridesObj;
+}
+
 // ============================================================================
 // Specialized Expression Property Extraction
 // ============================================================================
@@ -514,7 +587,7 @@ TSharedPtr<FJsonObject> UMaterialGraphReader::SerializeExpressionProperties(UMat
         Props->SetNumberField("default_value", ScalarParam->DefaultValue);
         Props->SetNumberField("min", ScalarParam->SliderMin);
         Props->SetNumberField("max", ScalarParam->SliderMax);
-        if (!ScalarParam->Group.IsEmpty())
+        if (!ScalarParam->Group.IsNone())
         {
             Props->SetStringField("group", ScalarParam->Group.ToString());
         }
@@ -535,7 +608,7 @@ TSharedPtr<FJsonObject> UMaterialGraphReader::SerializeExpressionProperties(UMat
         DefaultArr.Add(MakeShared<FJsonValueNumber>(VectorParam->DefaultValue.A));
         Props->SetArrayField("default_value", DefaultArr);
 
-        if (!VectorParam->Group.IsEmpty())
+        if (!VectorParam->Group.IsNone())
         {
             Props->SetStringField("group", VectorParam->Group.ToString());
         }
@@ -545,58 +618,25 @@ TSharedPtr<FJsonObject> UMaterialGraphReader::SerializeExpressionProperties(UMat
     // --- TextureSampleParameter2D (inherits TextureSample) ---
     if (UMaterialExpressionTextureSampleParameter2D* TexParam = Cast<UMaterialExpressionTextureSampleParameter2D>(Expr))
     {
-        TSharedPtr<FJsonObject> Props = MakeShared<FJsonObject>();
-        Props->SetStringField("parameter_name", TexParam->ParameterName.ToString());
+        return SerializeTextureSampleProperties(TexParam, &TexParam->ParameterName, &TexParam->Group);
+    }
 
-        if (TexParam->Texture)
-        {
-            Props->SetStringField("texture", TexParam->Texture->GetPathName());
-        }
-        else
-        {
-            Props->SetField("texture", MakeShared<FJsonValueNull>());
-        }
+    // --- TextureSampleParameterCube (inherits TextureSample) ---
+    if (UMaterialExpressionTextureSampleParameterCube* TexParam = Cast<UMaterialExpressionTextureSampleParameterCube>(Expr))
+    {
+        return SerializeTextureSampleProperties(TexParam, &TexParam->ParameterName, &TexParam->Group);
+    }
 
-        // Sampler type — SamplerSourceMode is not a UENUM, map manually
-        switch (TexParam->SamplerSource)
-        {
-            case SamplerSourceMode::SSM_FromTextureAsset: Props->SetStringField("sampler_type", "FromTextureAsset"); break;
-            case SamplerSourceMode::SSM_Wrap: Props->SetStringField("sampler_type", "Wrap"); break;
-            case SamplerSourceMode::SSM_Clamp: Props->SetStringField("sampler_type", "Clamp"); break;
-            default: Props->SetStringField("sampler_type", "Unknown"); break;
-        }
-
-        if (!TexParam->Group.IsEmpty())
-        {
-            Props->SetStringField("group", TexParam->Group.ToString());
-        }
-        return Props;
+    // --- TextureSampleParameterVolume (inherits TextureSample) ---
+    if (UMaterialExpressionTextureSampleParameterVolume* TexParam = Cast<UMaterialExpressionTextureSampleParameterVolume>(Expr))
+    {
+        return SerializeTextureSampleProperties(TexParam, &TexParam->ParameterName, &TexParam->Group);
     }
 
     // --- TextureSample (non-parameter) ---
     if (UMaterialExpressionTextureSample* TexSample = Cast<UMaterialExpressionTextureSample>(Expr))
     {
-        TSharedPtr<FJsonObject> Props = MakeShared<FJsonObject>();
-
-        if (TexSample->Texture)
-        {
-            Props->SetStringField("texture", TexSample->Texture->GetPathName());
-        }
-        else
-        {
-            Props->SetField("texture", MakeShared<FJsonValueNull>());
-        }
-
-        // Sampler type — SamplerSourceMode is not a UENUM, map manually
-        switch (TexSample->SamplerSource)
-        {
-            case SamplerSourceMode::SSM_FromTextureAsset: Props->SetStringField("sampler_type", "FromTextureAsset"); break;
-            case SamplerSourceMode::SSM_Wrap: Props->SetStringField("sampler_type", "Wrap"); break;
-            case SamplerSourceMode::SSM_Clamp: Props->SetStringField("sampler_type", "Clamp"); break;
-            default: Props->SetStringField("sampler_type", "Unknown"); break;
-        }
-
-        return Props;
+        return SerializeTextureSampleProperties(TexSample);
     }
 
     // --- MaterialFunctionCall ---
@@ -684,23 +724,59 @@ TSharedPtr<FJsonObject> UMaterialGraphReader::SerializeExpressionProperties(UMat
 // Utility Functions
 // ============================================================================
 
+TSharedPtr<FJsonObject> UMaterialGraphReader::SerializeTextureSampleProperties(
+    UMaterialExpressionTextureSample* TexSample,
+    const FName* ParameterName,
+    const FName* Group)
+{
+    TSharedPtr<FJsonObject> Props = MakeShared<FJsonObject>();
+    if (!TexSample) return Props;
+
+    if (ParameterName && !ParameterName->IsNone())
+    {
+        Props->SetStringField("parameter_name", ParameterName->ToString());
+    }
+
+    if (TexSample->Texture)
+    {
+        Props->SetStringField("texture", TexSample->Texture->GetPathName());
+    }
+    else
+    {
+        Props->SetField("texture", MakeShared<FJsonValueNull>());
+    }
+
+    Props->SetStringField("sampler_type", GetSamplerSourceName(static_cast<int64>(TexSample->SamplerSource)));
+
+    if (Group && !Group->IsNone())
+    {
+        Props->SetStringField("group", Group->ToString());
+    }
+
+    return Props;
+}
+
+FString UMaterialGraphReader::GetSamplerSourceName(int64 SamplerSource)
+{
+    if (const UEnum* SamplerEnum = StaticEnum<ESamplerSourceMode>())
+    {
+        return SamplerEnum->GetNameStringByValue(SamplerSource);
+    }
+
+    return TEXT("Unknown");
+}
+
 FString UMaterialGraphReader::GetExpressionClassName(UMaterialExpression* Expr)
 {
     if (!Expr) return "Unknown";
 
     FString ClassName = Expr->GetClass()->GetName();
 
-    // Strip "UMaterialExpression" prefix
-    // e.g. "MaterialExpressionMultiply" from "UMaterialExpressionMultiply"
+    // UE class names normally omit the leading U already; handle both forms.
     static const FString Prefix = TEXT("UMaterialExpression");
     if (ClassName.StartsWith(Prefix))
     {
-        ClassName.RightChopInline(Prefix.Len());
-        // If nothing left (e.g. the class IS UMaterialExpression), use full name
-        if (ClassName.IsEmpty())
-        {
-            ClassName = TEXT("MaterialExpression");
-        }
+        ClassName.RightChopInline(1);
     }
     else
     {
@@ -711,8 +787,7 @@ FString UMaterialGraphReader::GetExpressionClassName(UMaterialExpression* Expr)
         }
     }
 
-    // Prefix with "MaterialExpression" for clarity in the JSON
-    return FString::Printf(TEXT("MaterialExpression%s"), *ClassName);
+    return ClassName;
 }
 
 FString UMaterialGraphReader::GetExpressionTitle(UMaterialExpression* Expr)

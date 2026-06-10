@@ -57,7 +57,7 @@ json_str = unreal.BlueprintGraphReader.extract_blueprint_as_json(bp)
 names = unreal.BlueprintGraphReader.get_blueprint_graph_names(bp)
 nodes = unreal.BlueprintGraphReader.get_graph_nodes(graph)
 pin_info = unreal.BlueprintGraphReader.get_node_pin_info(node)
-semantic = unreal.BlueprintGraphReader.get_node_sem_info(node)
+semantic = unreal.BlueprintGraphReader.get_node_semantic_info(node)
 vars = unreal.BlueprintGraphReader.get_blueprint_variables(bp)
 ```
 

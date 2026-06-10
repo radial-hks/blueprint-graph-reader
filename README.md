@@ -268,6 +268,8 @@ C++ 插件通过 `UEdGraphSchema_K2` 常量映射 Pin 类别：
 
 除蓝图外，本插件还支持读取 **UE 材质节点图**，覆盖 UMaterial、UMaterialFunction、UMaterialInstanceConstant 三种资产类型。
 
+**注意**：`graph_to_pseudocode.py` 当前仅支持蓝图 JSON。材质图目前输出结构化 JSON，材质伪代码转换计划在后续版本添加。
+
 ### 架构差异
 
 材质图与蓝图图的核心区别在于数据模型：
